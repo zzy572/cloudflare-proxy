@@ -45,6 +45,14 @@ https://你的域名/你的密码
 2. `proxyip` 那台服务器需要禁用 ipv6，否则仍然无法访问twitter（因为twitter目前禁止使用ipv6访问）
 3. 目前默认添加了 ["x.com","twitter.com"]，这两个域名及其所有子域名的请求都会通过 `proxyip` 访问，如果需要更多，需要自行通过 `proxydomains` 变量设置
 
+## 视频教程
+
+https://youtu.be/fYsO3TATxAQ?si=6_NX140BSU_Fuk4L
+
+## 博客文章
+
+https://www.ajie.lu/article/2297d549-6f33-80de-a3c7-c561b5fe00ef
+
 ## 致谢
 
 - [@yonggekkk](https://github.com/yonggekkk) - 原项目作者
