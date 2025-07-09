@@ -1,5 +1,7 @@
 # Cloudflare Workers/Pages Trojan 代理
 
+> 经过更深一步研究，我发现我错了，原来不是脚本的问题，涌哥它们的脚本也是OK的，访问推特都没问题，主要还是 proxyip 的问题，重点是要把 proxyip 的 ipv6 禁用！因此本项目多此一举了，废弃⚠️ 不过作者的 proxyip 禁用了 ipv6，还是可以继续用。
+
 这是一个部署在 Cloudflare Workers/Pages 上的 Trojan 协议代理服务。本项目基于 [@yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan) 修改，增加了 `proxydomains` 参数支持。
 
 ## 主要特点
@@ -7,11 +9,10 @@
 - 支持 Trojan 协议
 - 支持部署在 Cloudflare Workers/Pages 上
 - 新增 `proxydomains` 参数，用于指定需要通过 proxyip 访问的域名
-- 解决了 Twitter 等服务在 CF IPv6 网络下无法访问的问题
 
 ## 为什么需要 proxydomains？
 
-Cloudflare 的节点中包含 IPv6 地址，这会导致某些服务（如 Twitter）无法正常访问。通过 `proxydomains` 参数，我们可以指定特定域名通过 proxyip 访问，而不是通过 Cloudflare 网络访问，从而解决访问问题。
+~~Cloudflare 的节点中包含 IPv6 地址，这会导致某些服务（如 Twitter）无法正常访问。通过 `proxydomains` 参数，我们可以指定特定域名通过 proxyip 访问，而不是通过 Cloudflare 网络访问，从而解决访问问题。~~
 
 ## 配置说明
 
