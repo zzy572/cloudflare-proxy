@@ -275,7 +275,17 @@ async function handleVLESSWebSocket(request) {
       // 将IPv4地址转换为NAT64的IPv6地址。
       function convertToNAT64IPv6(ipv4Address) {
         const parts = ipv4Address.split('.');
-        // ... (省略了地址验证和转换的实现细节)
+        if (parts.length !== 4) {
+          throw new Error('无效的IPv4地址');
+        }
+        
+        const hex = parts.map(part => {
+          const num = parseInt(part, 10);
+          if (num < 0 || num > 255) {
+            throw new Error('无效的IPv4地址段');
+          }
+          return num.toString(16).padStart(2, '0');
+        });
         // 使用一个已知的NAT64前缀来合成IPv6地址。
         const prefixes = ['2001:67c:2960:6464::'];
         const chosenPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
