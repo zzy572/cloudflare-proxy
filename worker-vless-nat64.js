@@ -1,392 +1,725 @@
-// 这是一个Cloudflare Worker脚本，它利用NAT64技术自动填充proxyip。
-// 这意味着它可以在仅有IPv6网络的环境下，无需（也不支持）手动设置proxyip，即可访问IPv4的服务器。
-
-// 从Cloudflare的运行时API中导入`connect`函数，用于创建出站TCP套接字连接。
+//nat64自动填充proxyip，无需且不支持proxyip设置
 import { connect } from "cloudflare:sockets";
-
-// 定义一个常量，表示WebSocket连接已打开的状态码。
 const WS_READY_STATE_OPEN = 1;
-
-// 默认的VLESS用户ID (UUID)。这个值可以被Cloudflare环境变量中的`uuid`覆盖。
 let userID = "86c50e3a-5b87-49dd-bd20-03c7f2735e40";
+const cn_hostnames = [""];
+// 添加需要直接使用NAT64的域名列表，支持从环境变量扩展
+let proxydomains = ["twitch.tv","ttvnw.net"];
 
-// 一个用于存放域名的数组，目前为空。设计用途可能与反向代理或路由决策相关。
-const cn_hostnames = [''];
+// 检查域名是否匹配，包括子域名
+function isDomainMatch(hostname, pattern) {
+  // 处理 hostname 为 IP 地址的情况
+  if (/^[\d.:]+$/.test(hostname)) {
+    return false;
+  }
+  
+  // 将域名按点分割成数组
+  const hostParts = hostname.split('.');
+  const patternParts = pattern.split('.');
+  
+  // 如果主域名部分比匹配模式短，则不可能匹配
+  if (hostParts.length < patternParts.length) {
+    return false;
+  }
+  
+  // 从后向前匹配每个部分
+  for (let i = 1; i <= patternParts.length; i++) {
+    if (hostParts[hostParts.length - i] !== patternParts[patternParts.length - i]) {
+      return false;
+    }
+  }
+  
+  return true;
+}
 
-// 默认的CDN IP或域名，用于生成vless链接。这个值可以被环境变量`cdnip`覆盖。
-// 原始代码中使用了Unicode转义序列来隐藏真实值 'www.visa.com.sg'。
-let CDNIP = 'www.visa.com.sg';
+let CDNIP =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d\u002e\u0073\u0067";
+// http_ip
+let IP1 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d";
+let IP2 =
+  "\u0063\u0069\u0073\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d";
+let IP3 =
+  "\u0061\u0066\u0072\u0069\u0063\u0061\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d";
+let IP4 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d\u002e\u0073\u0067";
+let IP5 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u0065\u0075\u0072\u006f\u0070\u0065\u002e\u0061\u0074";
+let IP6 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d\u002e\u006d\u0074";
+let IP7 =
+  "\u0071\u0061\u002e\u0076\u0069\u0073\u0061\u006d\u0069\u0064\u0064\u006c\u0065\u0065\u0061\u0073\u0074\u002e\u0063\u006f\u006d";
 
-// --- 预定义的优选IP/域名 ---
-// 这些地址用于生成不同节点的配置，可以被环境变量(ip1, ip2, ...)覆盖。
-// 它们被分为HTTP和HTTPS两组，对应不同的端口和TLS设置。
+// https_ip
+let IP8 =
+  "\u0075\u0073\u0061\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d";
+let IP9 =
+  "\u006d\u0079\u0061\u006e\u006d\u0061\u0072\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d";
+let IP10 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d\u002e\u0074\u0077";
+let IP11 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u0065\u0075\u0072\u006f\u0070\u0065\u002e\u0063\u0068";
+let IP12 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d\u002e\u0062\u0072";
+let IP13 =
+  "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u0073\u006f\u0075\u0074\u0068\u0065\u0061\u0073\u0074\u0065\u0075\u0072\u006f\u0070\u0065\u002e\u0063\u006f\u006d";
 
-// HTTP 节点使用的地址 (通常与非TLS端口配合)
-let IP1 = 'www.visa.com';
-let IP2 = 'cis.visa.com';
-let IP3 = 'africa.visa.com';
-let IP4 = 'www.visa.com.sg';
-let IP5 = 'www.visaeurope.at';
-let IP6 = 'www.visa.com.mt';
-let IP7 = 'qa.visamiddleeast.com';
+// http_port
+let PT1 = "80";
+let PT2 = "8080";
+let PT3 = "8880";
+let PT4 = "2052";
+let PT5 = "2082";
+let PT6 = "2086";
+let PT7 = "2095";
 
-// HTTPS 节点使用的地址 (通常与TLS端口配合)
-let IP8 = 'usa.visa.com';
-let IP9 = 'myanmar.visa.com';
-let IP10 = 'www.visa.com.tw';
-let IP11 = 'www.visaeurope.ch';
-let IP12 = 'www.visa.com.br';
-let IP13 = 'www.visasoutheasteurope.com';
-
-// --- 预定义的端口 ---
-// 这些端口同样可以被环境变量(pt1, pt2, ...)覆盖。
-
-// HTTP 端口 (非TLS)
-let PT1 = '80';
-let PT2 = '8080';
-let PT3 = '8880';
-let PT4 = '2052';
-let PT5 = '2082';
-let PT6 = '2086';
-let PT7 = '2095';
-
-// HTTPS 端口 (TLS)
-let PT8 = '443';
-let PT9 = '8443';
-let PT10 = '2053';
-let PT11 = '2083';
-let PT12 = '2087';
-let PT13 = '2096';
-
+// https_port
+let PT8 = "443";
+let PT9 = "8443";
+let PT10 = "2053";
+let PT11 = "2083";
+let PT12 = "2087";
+let PT13 = "2096";
 
 export default {
   /**
-   * Cloudflare Worker的主处理函数，每个进入的请求都会由它处理。
-   * @param {Request} request - 传入的HTTP请求对象。
-   * @param {object} env - 包含在Cloudflare上配置的环境变量的对象。
-   * @param {object} ctx - 请求的执行上下文。
-   * @returns {Promise<Response>} - 返回一个Promise，解析为Response对象。
+   * @param {any} request
+   * @param {{uuid: string, proxyip: string, cdnip: string, ip1: string, ip2: string, ip3: string, ip4: string, ip5: string, ip6: string, ip7: string, ip8: string, ip9: string, ip10: string, ip11: string, ip12: string, ip13: string, pt1: string, pt2: string, pt3: string, pt4: string, pt5: string, pt6: string, pt7: string, pt8: string, pt9: string, pt10: string, pt11: string, pt12: string, pt13: string, proxydomains: string}} env
+   * @param {any} ctx
+   * @returns {Promise<Response>}
    */
   async fetch(request, env, ctx) {
     try {
-      // 使用环境变量中的值覆盖默认配置（如果存在）。
-      // 这允许用户在不修改代码的情况下，通过Cloudflare仪表盘自定义配置。
       userID = env.uuid || userID;
       CDNIP = env.cdnip || CDNIP;
-	  IP1 = env.ip1 || IP1;
-	  IP2 = env.ip2 || IP2;
-	  // ... (其他IP和Port的覆盖逻辑)
-	  IP13 = env.ip13 || IP13;
-	  PT1 = env.pt1 || PT1;
-	  // ...
-	  PT13 = env.pt13 || PT13;
-
-      // 获取请求头中的'Upgrade'字段，用于判断是否是WebSocket升级请求。
+      // 处理环境变量中的 proxydomains
+      if (env.proxydomains) {
+        try {
+          // 尝试解析环境变量中的 JSON 数组
+          const envDomains = JSON.parse(env.proxydomains);
+          if (Array.isArray(envDomains)) {
+            // 合并环境变量中的域名和默认域名，去重
+            proxydomains = [...new Set([...proxydomains, ...envDomains])];
+          }
+        } catch (e) {
+          // 如果不是 JSON 数组，尝试按逗号分割
+          const envDomains = env.proxydomains.split(',').map(d => d.trim()).filter(d => d);
+          proxydomains = [...new Set([...proxydomains, ...envDomains])];
+        }
+      }
+      IP1 = env.ip1 || IP1;
+      IP2 = env.ip2 || IP2;
+      IP3 = env.ip3 || IP3;
+      IP4 = env.ip4 || IP4;
+      IP5 = env.ip5 || IP5;
+      IP6 = env.ip6 || IP6;
+      IP7 = env.ip7 || IP7;
+      IP8 = env.ip8 || IP8;
+      IP9 = env.ip9 || IP9;
+      IP10 = env.ip10 || IP10;
+      IP11 = env.ip11 || IP11;
+      IP12 = env.ip12 || IP12;
+      IP13 = env.ip13 || IP13;
+      PT1 = env.pt1 || PT1;
+      PT2 = env.pt2 || PT2;
+      PT3 = env.pt3 || PT3;
+      PT4 = env.pt4 || PT4;
+      PT5 = env.pt5 || PT5;
+      PT6 = env.pt6 || PT6;
+      PT7 = env.pt7 || PT7;
+      PT8 = env.pt8 || PT8;
+      PT9 = env.pt9 || PT9;
+      PT10 = env.pt10 || PT10;
+      PT11 = env.pt11 || PT11;
+      PT12 = env.pt12 || PT12;
+      PT13 = env.pt13 || PT13;
       const upgradeHeader = request.headers.get("Upgrade");
       const url = new URL(request.url);
-      
-      // 如果请求不是WebSocket升级请求，则作为常规HTTP请求处理。
       if (!upgradeHeader || upgradeHeader !== "websocket") {
+        const url = new URL(request.url);
         switch (url.pathname) {
-          // 如果请求路径是 `/<userID>`，则返回配置信息的HTML页面。
           case `/${userID}`: {
-            const vlessConfig = getVLESSConfig(userID, request.headers.get("Host"));
-            return new Response(vlessConfig, {
+            const vlessConfig = getvlessConfig(
+              userID,
+              request.headers.get("Host")
+            );
+            return new Response(`${vlessConfig}`, {
               status: 200,
-              headers: { "Content-Type": "text/html;charset=utf-8" },
+              headers: {
+                "Content-Type": "text/html;charset=utf-8",
+              },
             });
           }
-		  // 如果请求路径是 `/<userID>/ty`，则返回通用的Base64编码的订阅内容。
-		  case `/${userID}/ty`: {
-			const tyConfig = gettyConfig(userID, request.headers.get('Host'));
-			return new Response(tyConfig, {
-				status: 200,
-				headers: { "Content-Type": "text/plain;charset=utf-8" }
-			});
-		  }
-		  // 如果请求路径是 `/<userID>/cl`，则返回Clash-meta格式的订阅内容。
-		  case `/${userID}/cl`: {
-			const clConfig = getclConfig(userID, request.headers.get('Host'));
-			return new Response(clConfig, {
-				status: 200,
-				headers: { "Content-Type": "text/plain;charset=utf-8" }
-			});
-		  }
-		  // 如果请求路径是 `/<userID>/sb`，则返回Sing-box格式的订阅内容。
-		  case `/${userID}/sb`: {
-			const sbConfig = getsbConfig(userID, request.headers.get('Host'));
-			return new Response(sbConfig, {
-				status: 200,
-				headers: { "Content-Type": "application/json;charset=utf-8" }
-			});
-		  }
-		  // 以下是仅包含TLS节点的订阅链接
-		  case `/${userID}/pty`: {
-			const ptyConfig = getptyConfig(userID, request.headers.get('Host'));
-			return new Response(ptyConfig, {
-				status: 200,
-				headers: { "Content-Type": "text/plain;charset=utf-8" }
-			});
-		  }
-		  case `/${userID}/pcl`: {
-			const pclConfig = getpclConfig(userID, request.headers.get('Host'));
-			return new Response(pclConfig, {
-				status: 200,
-				headers: { "Content-Type": "text/plain;charset=utf-8" }
-			});
-		  }
-		  case `/${userID}/psb`: {
-			const psbConfig = getpsbConfig(userID, request.headers.get('Host'));
-			return new Response(psbConfig, {
-				status: 200,
-				headers: { "Content-Type": "application/json;charset=utf-8" }
-			});
-		  }
-          // 对于所有其他路径
+          case `/${userID}/ty`: {
+            const tyConfig = gettyConfig(userID, request.headers.get("Host"));
+            return new Response(`${tyConfig}`, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/plain;charset=utf-8",
+              },
+            });
+          }
+          case `/${userID}/cl`: {
+            const clConfig = getclConfig(userID, request.headers.get("Host"));
+            return new Response(`${clConfig}`, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/plain;charset=utf-8",
+              },
+            });
+          }
+          case `/${userID}/sb`: {
+            const sbConfig = getsbConfig(userID, request.headers.get("Host"));
+            return new Response(`${sbConfig}`, {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json;charset=utf-8",
+              },
+            });
+          }
+          case `/${userID}/pty`: {
+            const ptyConfig = getptyConfig(userID, request.headers.get("Host"));
+            return new Response(`${ptyConfig}`, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/plain;charset=utf-8",
+              },
+            });
+          }
+          case `/${userID}/pcl`: {
+            const pclConfig = getpclConfig(userID, request.headers.get("Host"));
+            return new Response(`${pclConfig}`, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/plain;charset=utf-8",
+              },
+            });
+          }
+          case `/${userID}/psb`: {
+            const psbConfig = getpsbConfig(userID, request.headers.get("Host"));
+            return new Response(`${psbConfig}`, {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json;charset=utf-8",
+              },
+            });
+          }
           default:
-            // 这个分支可以作为一个反向代理，但默认配置下cn_hostnames为空，因此通常会执行第一个if块。
-            if (cn_hostnames.includes('')) {
-              // 返回请求的Cloudflare相关信息，可用于调试。
+            // return new Response('Not found', { status: 404 });
+            // For any other path, reverse proxy to 'ramdom website' and return the original response, caching it in the process
+            if (cn_hostnames.includes("")) {
               return new Response(JSON.stringify(request.cf, null, 4), {
                 status: 200,
-                headers: { "Content-Type": "application/json;charset=utf-8" },
+                headers: {
+                  "Content-Type": "application/json;charset=utf-8",
+                },
               });
             }
-            // --- 以下是反向代理的逻辑，在当前配置下不会被触发 ---
-            const randomHostname = cn_hostnames[Math.floor(Math.random() * cn_hostnames.length)];
+            const randomHostname =
+              cn_hostnames[Math.floor(Math.random() * cn_hostnames.length)];
             const newHeaders = new Headers(request.headers);
-            // 伪造客户端IP和来源
             newHeaders.set("cf-connecting-ip", "1.2.3.4");
             newHeaders.set("x-forwarded-for", "1.2.3.4");
             newHeaders.set("x-real-ip", "1.2.3.4");
-            newHeaders.set("referer", "https://www.google.com/search?q=edtunnel");
-            const proxyUrl = "https://" + randomHostname + url.pathname + url.search;
+            newHeaders.set(
+              "referer",
+              "https://www.google.com/search?q=edtunnel"
+            );
+            // Use fetch to proxy the request to 15 different domains
+            const proxyUrl =
+              "https://" + randomHostname + url.pathname + url.search;
             let modifiedRequest = new Request(proxyUrl, {
               method: request.method,
               headers: newHeaders,
               body: request.body,
-              redirect: "manual", // 禁止自动重定向
+              redirect: "manual",
             });
-            const proxyResponse = await fetch(modifiedRequest, { redirect: "manual" });
-            // 如果代理服务器返回301或302重定向，则返回错误。
+            const proxyResponse = await fetch(modifiedRequest, {
+              redirect: "manual",
+            });
+            // Check for 302 or 301 redirect status and return an error response
             if ([301, 302].includes(proxyResponse.status)) {
-              return new Response(`Redirects to ${randomHostname} are not allowed.`, {
-                status: 403,
-                statusText: "Forbidden",
-              });
+              return new Response(
+                `Redirects to ${randomHostname} are not allowed.`,
+                {
+                  status: 403,
+                  statusText: "Forbidden",
+                }
+              );
             }
+            // Return the response from the proxy server
             return proxyResponse;
         }
       }
-      // 如果请求是WebSocket升级请求，则调用handleVLESSWebSocket函数进行处理。
-      return await handleVLESSWebSocket(request);
+      return await handlevlessWebSocket(request);
     } catch (err) {
-      // 捕获任何在处理过程中发生的错误，并将其作为响应返回。
-      let e = err;
+      /** @type {Error} */ let e = err;
       return new Response(e.toString());
     }
   },
 };
 
-/**
- * 处理VLESS over WebSocket的连接。
- * @param {Request} request - 传入的WebSocket升级请求。
- * @returns {Promise<Response>} - 返回一个建立WebSocket连接的响应。
- */
-async function handleVLESSWebSocket(request) {
-  // 创建一个WebSocket对，一个用于客户端(clientWS)，一个用于服务器(serverWS)。
+async function handlevlessWebSocket(request) {
   const wsPair = new WebSocketPair();
   const [clientWS, serverWS] = Object.values(wsPair);
 
-  // 接受服务器端的WebSocket连接。
   serverWS.accept();
 
-  // 从'sec-websocket-protocol'请求头中获取VLESS的早期数据（如果有的话）。
-  const earlyDataHeader = request.headers.get('sec-websocket-protocol') || '';
-  // 创建一个可读流，用于从WebSocket接收数据。
+  const earlyDataHeader = request.headers.get("sec-websocket-protocol") || "";
   const wsReadable = createWebSocketReadableStream(serverWS, earlyDataHeader);
-  let remoteSocket = null; // 用于存储到目标服务器的TCP连接。
+  let remoteSocket = null;
 
-  let udpStreamWrite = null; // 用于写入UDP数据的函数。
-  let isDns = false; // 标记当前连接是否是DNS查询。
-  
-  // 将WebSocket的可读流通过管道连接到一个可写流，以处理传入的数据块。
-  wsReadable.pipeTo(new WritableStream({
-    async write(chunk) {
-      // 如果是DNS查询并且UDP流处理器已准备好，直接将数据写入UDP流。
-      if (isDns && udpStreamWrite) {
-        return udpStreamWrite(chunk);
-      }
-      
-      // 如果已经建立了到远程服务器的TCP连接，则直接将数据块写入该连接。
-      if (remoteSocket) {
-        const writer = remoteSocket.writable.getWriter();
-        await writer.write(chunk);
-        writer.releaseLock();
-        return;
-      }
+  let udpStreamWrite = null;
+  let isDns = false;
 
-      // 如果没有远程连接，这必须是包含VLESS头的第一个数据块。
-      // 解析VLESS头部信息。
-      const result = parseVLESSHeader(chunk, userID);
-      if (result.hasError) {
-        throw new Error(result.message);
-      }
-
-      // 准备VLESS响应头，版本号与请求一致，附加位为0。
-      const vlessRespHeader = new Uint8Array([result.vlessVersion[0], 0]);
-      // 获取VLESS头之后
-      // 的原始客户端数据。
-      const rawClientData = chunk.slice(result.rawDataIndex);
-      
-      // 如果是UDP请求
-      if (result.isUDP) {
-        // 目前只支持DNS查询（端口53）的UDP代理。
-        if (result.portRemote === 53) {
-          isDns = true;
-          // 设置UDP出站处理器
-          const { write } = await handleUDPOutBound(serverWS, vlessRespHeader);
-          udpStreamWrite = write;
-          // 将第一个数据包写入UDP处理器。
-          udpStreamWrite(rawClientData);
-          return;
-        } else {
-          throw new Error('UDP代理仅支持DNS(端口53)');
-        }
-      }
-
-      // --- TCP代理的核心逻辑 ---
-
-      // 封装了连接和写入初始数据的函数。
-      async function connectAndWrite(address, port) {
-        // 使用`connect` API建立到目标地址和端口的TCP连接。
-        const tcpSocket = await connect({
-          hostname: address,
-          port: port
-        });
-        remoteSocket = tcpSocket;
-        const writer = tcpSocket.writable.getWriter();
-        // 将第一个数据包写入目标服务器。
-        await writer.write(rawClientData);
-        writer.releaseLock();
-        return tcpSocket;
-      }
-      
-      // 将IPv4地址转换为NAT64的IPv6地址。
-      function convertToNAT64IPv6(ipv4Address) {
-        const parts = ipv4Address.split('.');
-        if (parts.length !== 4) {
-          throw new Error('无效的IPv4地址');
-        }
-        
-        const hex = parts.map(part => {
-          const num = parseInt(part, 10);
-          if (num < 0 || num > 255) {
-            throw new Error('无效的IPv4地址段');
+  wsReadable
+    .pipeTo(
+      new WritableStream({
+        async write(chunk) {
+          if (isDns && udpStreamWrite) {
+            return udpStreamWrite(chunk);
           }
-          return num.toString(16).padStart(2, '0');
-        });
-        // 使用一个已知的NAT64前缀来合成IPv6地址。
-        const prefixes = ['2001:67c:2960:6464::'];
-        const chosenPrefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-        return `[${chosenPrefix}${hex[0]}${hex[1]}:${hex[2]}${hex[3]}]`;
-      }
-      
-      // 通过DoH（DNS over HTTPS）获取域名的IPv4地址，然后转换为NAT64 IPv6地址。
-      async function getIPv6ProxyAddress(domain) {
-        try {
-          // 向公共DNS服务器查询A记录
-          const dnsQuery = await fetch(`https://1.1.1.1/dns-query?name=${domain}&type=A`, {
-            headers: { 'Accept': 'application/dns-json' }
-          });
-          const dnsResult = await dnsQuery.json();
-          if (dnsResult.Answer && dnsResult.Answer.length > 0) {
-            const aRecord = dnsResult.Answer.find(record => record.type === 1);
-            if (aRecord) {
-              const ipv4Address = aRecord.data;
-              // 将获取到的IPv4地址转换为NAT64 IPv6地址。
-              return convertToNAT64IPv6(ipv4Address);
+
+          if (remoteSocket) {
+            const writer = remoteSocket.writable.getWriter();
+            await writer.write(chunk);
+            writer.releaseLock();
+            return;
+          }
+
+          const result = parsevlessHeader(chunk, userID);
+          if (result.hasError) {
+            throw new Error(result.message);
+          }
+
+          const vlessRespHeader = new Uint8Array([result.vlessVersion[0], 0]);
+          const rawClientData = chunk.slice(result.rawDataIndex);
+
+          if (result.isUDP) {
+            if (result.portRemote === 53) {
+              isDns = true;
+              const { write } = await handleUDPOutBound(
+                serverWS,
+                vlessRespHeader
+              );
+              udpStreamWrite = write;
+              udpStreamWrite(rawClientData);
+              return;
+            } else {
+              throw new Error("UDP代理仅支持DNS(端口53)");
             }
           }
-          throw new Error('无法解析域名的IPv4地址');
-        } catch (err) {
-          throw new Error(`DNS解析失败: ${err.message}`);
-        }
-      }
 
-      // 重试函数，当直接连接失败时被调用。
-      async function retry() {
-        try {
-          // 获取目标的NAT64 IPv6地址。
-          const proxyIP = await getIPv6ProxyAddress(result.addressRemote);
-          console.log(`尝试通过NAT64 IPv6地址 ${proxyIP} 连接...`);
-          // 使用NAT64地址进行连接。
-          const tcpSocket = await connect({
-            hostname: proxyIP,
-            port: result.portRemote
-          });
-          remoteSocket = tcpSocket;
-          const writer = tcpSocket.writable.getWriter();
-          await writer.write(rawClientData);
-          writer.releaseLock();
-          // 将远程连接的数据流回传给WebSocket客户端。
-          pipeRemoteToWebSocket(tcpSocket, serverWS, vlessRespHeader, null);
-        } catch (err) {
-          console.error('NAT64 IPv6连接失败:', err);
-          serverWS.close(1011, 'NAT64 IPv6连接失败: ' + err.message);
-        }
-      }
+          async function connectAndWrite(address, port) {
+            // 检查域名是否在 proxydomains 列表中
+            const shouldUseNAT64 = proxydomains.some(domain => isDomainMatch(address, domain));
+            
+            if (shouldUseNAT64) {
+              // 如果域名匹配，获取NAT64 IPv6地址
+              const proxyIP = await getIPv6ProxyAddress(result.addressRemote);
+              console.log(`指定域名: ${result.addressRemote}，直接通过NAT64 IPv6地址 ${proxyIP} 连接...`);
+              console.log(`连接参数: { hostname: ${proxyIP}, port: ${result.portRemote} }`);
+              address = proxyIP;
+            }
 
-      // --- 首次连接尝试 ---
-      try {
-        // 首先尝试直接连接客户端请求的目标地址。
-        const tcpSocket = await connectAndWrite(result.addressRemote, result.portRemote);
-        // 如果连接成功，则开始双向转发数据，并传入`retry`函数作为连接失败时的回调。
-        pipeRemoteToWebSocket(tcpSocket, serverWS, vlessRespHeader, retry);
-      } catch (err) {
-        console.error('连接失败:', err);
-        // 如果直接连接失败，不是立即重试，而是在`pipeRemoteToWebSocket`中判断是否需要重试。
-        // 如果初始连接就抛出异常，通常意味着地址无法解析或被拒绝，直接关闭连接。
-        serverWS.close(1011, '连接失败');
-      }
-    },
-    close() {
-      // 当WebSocket关闭时，确保远程TCP连接也被关闭。
-      if (remoteSocket) {
-        closeSocket(remoteSocket);
-      }
-    }
-  })).catch(err => {
-    // 捕获流处理中的任何错误。
-    console.error('WebSocket 错误:', err);
-    closeSocket(remoteSocket);
-    serverWS.close(1011, '内部错误');
-  });
+            // 原有逻辑
+            const tcpSocket = await connect({
+              hostname: address,
+              port: port,
+            });
+            remoteSocket = tcpSocket;
+            const writer = tcpSocket.writable.getWriter();
+            await writer.write(rawClientData);
+            writer.releaseLock();
+            return tcpSocket;
+          }
 
-  // 返回一个101 Switching Protocols响应，完成WebSocket握手。
+          function convertToNAT64IPv6(ipv4Address) {
+            const parts = ipv4Address.split(".");
+            if (parts.length !== 4) {
+              throw new Error("无效的IPv4地址");
+            }
+
+            const hex = parts.map((part) => {
+              const num = parseInt(part, 10);
+              if (num < 0 || num > 255) {
+                throw new Error("无效的IPv4地址段");
+              }
+              return num.toString(16).padStart(2, "0");
+            });
+            const prefixes = ["2001:67c:2960:6464::"]; //,'2a01:4f9:c010:3f02:64::'
+            const chosenPrefix =
+              prefixes[Math.floor(Math.random() * prefixes.length)];
+            return `[${chosenPrefix}${hex[0]}${hex[1]}:${hex[2]}${hex[3]}]`;
+          }
+
+          async function getIPv6ProxyAddress(domain) {
+            try {
+              console.log(`开始解析域名: ${domain}`);
+              const dnsQuery = await fetch(
+                `https://1.1.1.1/dns-query?name=${domain}&type=A`,
+                {
+                  headers: {
+                    Accept: "application/dns-json",
+                  },
+                }
+              );
+
+              const dnsResult = await dnsQuery.json();
+              console.log(`DNS查询结果:`, dnsResult);
+              
+              if (dnsResult.Answer && dnsResult.Answer.length > 0) {
+                console.log(`找到 ${dnsResult.Answer.length} 条记录`);
+                const aRecord = dnsResult.Answer.find(
+                  (record) => record.type === 1
+                );
+                if (aRecord) {
+                  const ipv4Address = aRecord.data;
+                  console.log(`找到IPv4地址: ${ipv4Address}`);
+                  const nat64Address = convertToNAT64IPv6(ipv4Address);
+                  console.log(`转换后的NAT64地址: ${nat64Address}`);
+                  return nat64Address;
+                } else {
+                  console.log(`未找到A记录`);
+                }
+              } else {
+                console.log(`DNS响应中没有Answer字段或Answer为空`);
+              }
+              throw new Error("无法解析域名的IPv4地址");
+            } catch (err) {
+              console.error(`DNS查询过程出错:`, err);
+              throw new Error(`DNS解析失败: ${err.message}`);
+            }
+          }
+
+          async function retry() {
+            try {
+              const proxyIP = await getIPv6ProxyAddress(result.addressRemote);
+              console.log(`尝试通过NAT64 IPv6地址 ${proxyIP} 连接...`);
+              console.log(`连接参数: { hostname: ${proxyIP}, port: ${result.portRemote} }`);
+              
+              let tcpSocket;
+              try {
+                tcpSocket = await connect({
+                  hostname: proxyIP,
+                  port: result.portRemote,
+                });
+                console.log('TCP连接建立成功');
+              } catch (connErr) {
+                console.error('TCP连接建立失败:', connErr);
+                throw connErr;
+              }
+              
+              if (!tcpSocket) {
+                throw new Error('TCP连接返回为空');
+              }
+              
+              remoteSocket = tcpSocket;
+              
+              try {
+                const writer = tcpSocket.writable.getWriter();
+                await writer.write(rawClientData);
+                writer.releaseLock();
+                console.log('数据写入成功');
+              } catch (writeErr) {
+                console.error('数据写入失败:', writeErr);
+                throw writeErr;
+              }
+
+              tcpSocket.closed
+                .catch((error) => {
+                  console.error("TCP连接关闭错误:", error);
+                })
+                .finally(() => {
+                  if (serverWS && serverWS.readyState === WS_READY_STATE_OPEN) {
+                    serverWS.close(1000, "连接已关闭");
+                  }
+                });
+
+              console.log('开始建立WebSocket管道...');
+           
+              pipeRemoteToWebSocket(tcpSocket, serverWS, vlessRespHeader, null);
+            
+              console.log('WebSocket管道建立完成');
+              
+            } catch (err) {
+              console.error("NAT64 IPv6连接过程失败:", err);
+              if (serverWS && serverWS.readyState === WS_READY_STATE_OPEN) {
+                serverWS.close(1011, `NAT64 IPv6连接失败: ${err.message}`);
+              }
+            }
+          }
+
+          try {
+            const tcpSocket = await connectAndWrite(
+              result.addressRemote,
+              result.portRemote
+            );
+            pipeRemoteToWebSocket(tcpSocket, serverWS, vlessRespHeader, retry);
+          } catch (err) {
+            console.error("连接失败:", err);
+            serverWS.close(1011, "连接失败");
+          }
+        },
+        close() {
+          if (remoteSocket) {
+            closeSocket(remoteSocket);
+          }
+        },
+      })
+    )
+    .catch((err) => {
+      console.error("WebSocket 错误:", err);
+      closeSocket(remoteSocket);
+      serverWS.close(1011, "内部错误");
+    });
+
   return new Response(null, {
     status: 101,
     webSocket: clientWS,
   });
 }
 
-// ... (其他辅助函数如 createWebSocketReadableStream, parseVLESSHeader, pipeRemoteToWebSocket 等的注释已在上面逻辑中穿插解释)
-// ... (所有配置生成函数如 getVLESSConfig, gettyConfig, getclConfig 等已解码并将在下方展示)
+function createWebSocketReadableStream(ws, earlyDataHeader) {
+  return new ReadableStream({
+    start(controller) {
+      ws.addEventListener("message", (event) => {
+        controller.enqueue(event.data);
+      });
 
+      ws.addEventListener("close", () => {
+        controller.close();
+      });
+
+      ws.addEventListener("error", (err) => {
+        controller.error(err);
+      });
+
+      if (earlyDataHeader) {
+        try {
+          const decoded = atob(
+            earlyDataHeader.replace(/-/g, "+").replace(/_/g, "/")
+          );
+          const data = Uint8Array.from(decoded, (c) => c.charCodeAt(0));
+          controller.enqueue(data.buffer);
+        } catch (e) {}
+      }
+    },
+  });
+}
+
+function parsevlessHeader(buffer, userID) {
+  if (buffer.byteLength < 24) {
+    return { hasError: true, message: "无效的头部长度" };
+  }
+
+  const view = new DataView(buffer);
+  const version = new Uint8Array(buffer.slice(0, 1));
+
+  const uuid = formatUUID(new Uint8Array(buffer.slice(1, 17)));
+  if (uuid !== userID) {
+    return { hasError: true, message: "无效的用户" };
+  }
+
+  const optionsLength = view.getUint8(17);
+  const command = view.getUint8(18 + optionsLength);
+
+  let isUDP = false;
+  if (command === 1) {
+  } else if (command === 2) {
+    isUDP = true;
+  } else {
+    return { hasError: true, message: "不支持的命令，仅支持TCP(01)和UDP(02)" };
+  }
+
+  let offset = 19 + optionsLength;
+  const port = view.getUint16(offset);
+  offset += 2;
+
+  const addressType = view.getUint8(offset++);
+  let address = "";
+
+  switch (addressType) {
+    case 1: // IPv4
+      address = Array.from(
+        new Uint8Array(buffer.slice(offset, offset + 4))
+      ).join(".");
+      offset += 4;
+      break;
+
+    case 2: // 域名
+      const domainLength = view.getUint8(offset++);
+      address = new TextDecoder().decode(
+        buffer.slice(offset, offset + domainLength)
+      );
+      offset += domainLength;
+      break;
+
+    case 3: // IPv6
+      const ipv6 = [];
+      for (let i = 0; i < 8; i++) {
+        ipv6.push(view.getUint16(offset).toString(16).padStart(4, "0"));
+        offset += 2;
+      }
+      address = ipv6.join(":").replace(/(^|:)0+(\w)/g, "$1$2");
+      break;
+
+    default:
+      return { hasError: true, message: "不支持的地址类型" };
+  }
+
+  return {
+    hasError: false,
+    addressRemote: address,
+    portRemote: port,
+    rawDataIndex: offset,
+    vlessVersion: version,
+    isUDP,
+  };
+}
+
+function pipeRemoteToWebSocket(remoteSocket, ws, vlessHeader, retry = null) {
+  let headerSent = false;
+  let hasIncomingData = false;
+
+  remoteSocket.readable
+    .pipeTo(
+      new WritableStream({
+        write(chunk) {
+          hasIncomingData = true;
+          if (ws.readyState === WS_READY_STATE_OPEN) {
+            if (!headerSent) {
+              const combined = new Uint8Array(
+                vlessHeader.byteLength + chunk.byteLength
+              );
+              combined.set(new Uint8Array(vlessHeader), 0);
+              combined.set(new Uint8Array(chunk), vlessHeader.byteLength);
+              ws.send(combined.buffer);
+              headerSent = true;
+            } else {
+              ws.send(chunk);
+            }
+          }
+        },
+        close() {
+          if (!hasIncomingData && retry) {
+            retry();
+            return;
+          }
+          if (ws.readyState === WS_READY_STATE_OPEN) {
+            ws.close(1000, "正常关闭");
+          }
+        },
+        abort() {
+          closeSocket(remoteSocket);
+        },
+      })
+    )
+    .catch((err) => {
+      console.error("数据转发错误:", err);
+      closeSocket(remoteSocket);
+      if (ws.readyState === WS_READY_STATE_OPEN) {
+        ws.close(1011, "数据传输错误");
+      }
+    });
+}
+
+function closeSocket(socket) {
+  if (socket) {
+    try {
+      socket.close();
+    } catch (e) {}
+  }
+}
+
+function formatUUID(bytes) {
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
+    ""
+  );
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+    12,
+    16
+  )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function handleUDPOutBound(webSocket, vlessResponseHeader) {
+  let isvlessHeaderSent = false;
+  const transformStream = new TransformStream({
+    start(controller) {},
+    transform(chunk, controller) {
+      for (let index = 0; index < chunk.byteLength; ) {
+        const lengthBuffer = chunk.slice(index, index + 2);
+        const udpPacketLength = new DataView(lengthBuffer).getUint16(0);
+        const udpData = new Uint8Array(
+          chunk.slice(index + 2, index + 2 + udpPacketLength)
+        );
+        index = index + 2 + udpPacketLength;
+        controller.enqueue(udpData);
+      }
+    },
+    flush(controller) {},
+  });
+
+  transformStream.readable
+    .pipeTo(
+      new WritableStream({
+        async write(chunk) {
+          const resp = await fetch("https://1.1.1.1/dns-query", {
+            method: "POST",
+            headers: {
+              "content-type": "application/dns-message",
+            },
+            body: chunk,
+          });
+          const dnsQueryResult = await resp.arrayBuffer();
+          const udpSize = dnsQueryResult.byteLength;
+          const udpSizeBuffer = new Uint8Array([
+            (udpSize >> 8) & 0xff,
+            udpSize & 0xff,
+          ]);
+
+          if (webSocket.readyState === WS_READY_STATE_OPEN) {
+            console.log(`DNS查询成功，DNS消息长度为 ${udpSize}`);
+            if (isvlessHeaderSent) {
+              webSocket.send(
+                await new Blob([udpSizeBuffer, dnsQueryResult]).arrayBuffer()
+              );
+            } else {
+              webSocket.send(
+                await new Blob([
+                  vlessResponseHeader,
+                  udpSizeBuffer,
+                  dnsQueryResult,
+                ]).arrayBuffer()
+              );
+              isvlessHeaderSent = true;
+            }
+          }
+        },
+      })
+    )
+    .catch((error) => {
+      console.error("DNS UDP处理错误:", error);
+    });
+
+  const writer = transformStream.writable.getWriter();
+
+  return {
+    write(chunk) {
+      writer.write(chunk);
+    },
+  };
+}
 /**
- * 生成包含配置信息和订阅链接的HTML页面。
- * @param {string} userID 用户的UUID
- * @param {string | null} hostName 当前请求的主机名
- * @returns {string} 完整的HTML内容
+ *
+ * @param {string} userID
+ * @param {string | null} hostName
+ * @returns {string}
  */
-function getVLESSConfig(userID, hostName) {
-  // 生成WebSocket (非TLS) 的VLESS链接
-  const wvlessws = `vless://${userID}@${CDNIP}:8880?encryption=none&security=none&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#${hostName}`;
-  // 生成WebSocket + TLS 的VLESS链接
-  const pvlesswstls = `vless://${userID}@${CDNIP}:8443?encryption=none&security=tls&type=ws&host=${hostName}&sni=${hostName}&fp=random&path=%2F%3Fed%3D2560#${hostName}`;
-  // 备注信息
-  const note = `甬哥博客地址：https://ygkkk.blogspot.com\n甬哥YouTube频道：https://www.youtube.com/@ygkkk\n甬哥TG电报群组：https://t.me/ygkkktg\n甬哥TG电报频道：https://t.me/ygkkktgpd\n\nProxyIP使用nat64自动生成，无需设置`;
-  // 生成各种订阅链接
+function getvlessConfig(userID, hostName) {
+  const wvlessws = `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${CDNIP}:8880?encryption=none&security=none&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#${hostName}`;
+  const pvlesswstls = `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${CDNIP}:8443?encryption=none&security=tls&type=ws&host=${hostName}&sni=${hostName}&fp=random&path=%2F%3Fed%3D2560#${hostName}`;
+  const note = `阿杰鲁博客地址：https://ajie.lu\n阿杰鲁YouTube频道：https://www.youtube.com/@zaunist\n阿杰鲁TG电报群组：https://t.me/zaunist\n\nProxyIP使用nat64自动生成，无需设置，也不能设置`;
   const ty = `https://${hostName}/${userID}/ty`;
   const cl = `https://${hostName}/${userID}/cl`;
   const sb = `https://${hostName}/${userID}/sb`;
@@ -394,71 +727,449 @@ function getVLESSConfig(userID, hostName) {
   const pcl = `https://${hostName}/${userID}/pcl`;
   const psb = `https://${hostName}/${userID}/psb`;
 
-  // 将所有节点（包括http和https）的vless链接拼接后进行Base64编码，作为通用分享链接。
-  const wkvlessshare = btoa(`vless://${userID}@${IP1}:${PT1}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V1_${IP1}_${PT1}\nvless://${userID}@${IP2}:${PT2}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V2_${IP2}_${PT2}\n ... (其他节点) ... \nvless://${userID}@${IP13}:${PT13}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V13_${IP13}_${PT13}`);
+  const wkvlessshare = btoa(
+    `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP1}:${PT1}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V1_${IP1}_${PT1}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP2}:${PT2}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V2_${IP2}_${PT2}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP3}:${PT3}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V3_${IP3}_${PT3}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP4}:${PT4}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V4_${IP4}_${PT4}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP5}:${PT5}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V5_${IP5}_${PT5}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP6}:${PT6}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V6_${IP6}_${PT6}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP7}:${PT7}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V7_${IP7}_${PT7}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP8}:${PT8}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V8_${IP8}_${PT8}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP9}:${PT9}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V9_${IP9}_${PT9}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP10}:${PT10}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V10_${IP10}_${PT10}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP11}:${PT11}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V11_${IP11}_${PT11}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP12}:${PT12}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V12_${IP12}_${PT12}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP13}:${PT13}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V13_${IP13}_${PT13}`
+  );
 
-  // 仅将https节点的vless链接拼接后进行Base64编码。
-  const pgvlessshare = btoa(`vless://${userID}@${IP8}:${PT8}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V8_${IP8}_${PT8}\n ... (其他TLS节点) ... \nvless://${userID}@${IP13}:${PT13}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V13_${IP13}_${PT13}`);	
+  const pgvlessshare = btoa(
+    `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP8}:${PT8}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V8_${IP8}_${PT8}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP9}:${PT9}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V9_${IP9}_${PT9}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP10}:${PT10}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V10_${IP10}_${PT10}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP11}:${PT11}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V11_${IP11}_${PT11}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP12}:${PT12}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V12_${IP12}_${PT12}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP13}:${PT13}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V13_${IP13}_${PT13}`
+  );
 
-  // 将备注中的换行符替换为HTML的<br>标签，以便在页面上显示。
-  const noteshow = note.replace(/\n/g, '<br>');
-  // HTML模板头部，引入Bootstrap样式和复制到剪贴板的JS函数。
-  const displayHtml = `...`; // 省略了大部分HTML代码，因为它们主要是UI展示
-
-  // 根据当前访问的域名是否是Cloudflare的workers.dev域名，返回不同的HTML页面。
-  // workers.dev域名通常不支持直接TLS连接，所以会同时显示TLS和非TLS节点。
-  // 自定义域名通常配置了SSL，所以主要显示TLS节点。
+  const noteshow = note.replace(/\n/g, "<br>");
+  const displayHtml = `
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+<style>
+.limited-width {
+    max-width: 200px;
+    overflow: auto;
+    word-wrap: break-word;
+}
+</style>
+</head>
+<script>
+function copyToClipboard(text) {
+  const input = document.createElement('textarea');
+  input.style.position = 'fixed';
+  input.style.opacity = 0;
+  input.value = text;
+  document.body.appendChild(input);
+  input.select();
+  document.execCommand('Copy');
+  document.body.removeChild(input);
+  alert('已复制到剪贴板');
+}
+</script>
+`;
   if (hostName.includes("workers.dev")) {
-    // 返回适用于 workers.dev 域名的HTML页面
-    return `... 页面HTML，包含 wkvlessshare 和所有订阅链接 ...`;
+    return `
+<br>
+<br>
+${displayHtml}
+<body>
+<div class="container">
+    <div class="row">
+        <div class="col-md-12">
+            <h1>Cloudflare-workers/pages-\u0076\u006c\u0065\u0073\u0073代理脚本 V25.5.27</h1>
+	    <hr>
+            <p>${noteshow}</p>
+            <hr>
+	    <hr>
+	    <hr>
+            <br>
+            <br>
+            <h3>1：CF-workers-\u0076\u006c\u0065\u0073\u0073+ws节点</h3>
+			<table class="table">
+				<thead>
+					<tr>
+						<th>节点特色：</th>
+						<th>单节点链接如下：</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td class="limited-width">关闭了TLS加密，无视域名阻断</td>
+						<td class="limited-width">${wvlessws}</td>
+						<td><button class="btn btn-primary" onclick="copyToClipboard('${wvlessws}')">点击复制链接</button></td>
+					</tr>
+				</tbody>
+			</table>
+            <h5>客户端参数如下：</h5>
+            <ul>
+                <li>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP 或者 反代IP</li>
+                <li>端口(port)：7个http端口可任意选择(80、8080、8880、2052、2082、2086、2095)，或反代IP对应端口</li>
+                <li>用户ID(uuid)：${userID}</li>
+                <li>传输协议(network)：ws 或者 websocket</li>
+                <li>伪装域名(host)：${hostName}</li>
+                <li>路径(path)：/?ed=2560</li>
+		<li>传输安全(TLS)：关闭</li>
+            </ul>
+            <hr>
+			<hr>
+			<hr>
+            <br>
+            <br>
+            <h3>2：CF-workers-\u0076\u006c\u0065\u0073\u0073+ws+tls节点</h3>
+			<table class="table">
+				<thead>
+					<tr>
+						<th>节点特色：</th>
+						<th>单节点链接如下：</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td class="limited-width">启用了TLS加密，<br>如果客户端支持分片(Fragment)功能，建议开启，防止域名阻断</td>
+						<td class="limited-width">${pvlesswstls}</td>	
+						<td><button class="btn btn-primary" onclick="copyToClipboard('${pvlesswstls}')">点击复制链接</button></td>
+					</tr>
+				</tbody>
+			</table>
+            <h5>客户端参数如下：</h5>
+            <ul>
+                <li>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP 或者 反代IP</li>
+                <li>端口(port)：6个https端口可任意选择(443、8443、2053、2083、2087、2096)，或反代IP对应端口</li>
+                <li>用户ID(uuid)：${userID}</li>
+                <li>传输协议(network)：ws 或者 websocket</li>
+                <li>伪装域名(host)：${hostName}</li>
+                <li>路径(path)：/?ed=2560</li>
+                <li>传输安全(TLS)：开启</li>
+                <li>跳过证书验证(allowlnsecure)：false</li>
+			</ul>
+			<hr>
+			<hr>
+			<hr>
+			<br>	
+			<br>
+			<h3>3：聚合通用、Clash-meta、Sing-box订阅链接如下：</h3>
+			<hr>
+			<p>注意：<br>1、默认每个订阅链接包含TLS+非TLS共13个端口节点<br>2、当前workers域名作为订阅链接，需通过代理进行订阅更新<br>3、如使用的客户端不支持分片功能，则TLS节点不可用</p>
+			<hr>
+
+
+			<table class="table">
+					<thead>
+						<tr>
+							<th>聚合通用分享链接 (可直接导入客户端)：</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><button class="btn btn-primary" onclick="copyToClipboard('${wkvlessshare}')">点击复制链接</button></td>
+						</tr>
+					</tbody>
+				</table>
+
+
+   
+			<table class="table">
+					<thead>
+						<tr>
+							<th>聚合通用订阅链接：</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td class="limited-width">${ty}</td>	
+							<td><button class="btn btn-primary" onclick="copyToClipboard('${ty}')">点击复制链接</button></td>
+						</tr>
+					</tbody>
+				</table>	
+
+				<table class="table">
+						<thead>
+							<tr>
+								<th>Clash-meta订阅链接：</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td class="limited-width">${cl}</td>	
+								<td><button class="btn btn-primary" onclick="copyToClipboard('${cl}')">点击复制链接</button></td>
+							</tr>
+						</tbody>
+					</table>
+
+					<table class="table">
+					<thead>
+						<tr>
+							<th>Sing-box订阅链接：</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td class="limited-width">${sb}</td>	
+							<td><button class="btn btn-primary" onclick="copyToClipboard('${sb}')">点击复制链接</button></td>
+						</tr>
+					</tbody>
+				</table>
+				<br>
+				<br>
+        </div>
+    </div>
+</div>
+</body>
+`;
   } else {
-    // 返回适用于自定义域名的HTML页面
-    return `... 页面HTML，包含 pgvlessshare 和仅TLS的订阅链接 ...`;
+    return `
+<br>
+<br>
+${displayHtml}
+<body>
+<div class="container">
+    <div class="row">
+        <div class="col-md-12">
+            <h1>Cloudflare-workers/pages-\u0076\u006c\u0065\u0073\u0073代理脚本 V25.5.27</h1>
+			<hr>
+            <p>${noteshow}</p>
+            <hr>
+			<hr>
+			<hr>
+            <br>
+            <br>
+            <h3>1：CF-pages/workers/自定义域-\u0076\u006c\u0065\u0073\u0073+ws+tls节点</h3>
+			<table class="table">
+				<thead>
+					<tr>
+						<th>节点特色：</th>
+						<th>单节点链接如下：</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td class="limited-width">启用了TLS加密，<br>如果客户端支持分片(Fragment)功能，可开启，防止域名阻断</td>
+						<td class="limited-width">${pvlesswstls}</td>
+						<td><button class="btn btn-primary" onclick="copyToClipboard('${pvlesswstls}')">点击复制链接</button></td>
+					</tr>
+				</tbody>
+			</table>
+            <h5>客户端参数如下：</h5>
+            <ul>
+                <li>客户端地址(address)：自定义的域名 或者 优选域名 或者 优选IP 或者 反代IP</li>
+                <li>端口(port)：6个https端口可任意选择(443、8443、2053、2083、2087、2096)，或反代IP对应端口</li>
+                <li>用户ID(uuid)：${userID}</li>
+                <li>传输协议(network)：ws 或者 websocket</li>
+                <li>伪装域名(host)：${hostName}</li>
+                <li>路径(path)：/?ed=2560</li>
+                <li>传输安全(TLS)：开启</li>
+                <li>跳过证书验证(allowlnsecure)：false</li>
+			</ul>
+            <hr>
+			<hr>
+			<hr>
+            <br>
+            <br>
+			<h3>2：聚合通用、Clash-meta、Sing-box订阅链接如下：</h3>
+			<hr>
+			<p>注意：以下订阅链接仅6个TLS端口节点</p>
+			<hr>
+
+
+			<table class="table">
+					<thead>
+						<tr>
+							<th>聚合通用分享链接 (可直接导入客户端)：</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td><button class="btn btn-primary" onclick="copyToClipboard('${pgvlessshare}')">点击复制链接</button></td>
+						</tr>
+					</tbody>
+				</table>
+
+
+
+			<table class="table">
+					<thead>
+						<tr>
+							<th>聚合通用订阅链接：</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td class="limited-width">${pty}</td>	
+							<td><button class="btn btn-primary" onclick="copyToClipboard('${pty}')">点击复制链接</button></td>
+						</tr>
+					</tbody>
+				</table>	
+
+				<table class="table">
+						<thead>
+							<tr>
+								<th>Clash-meta订阅链接：</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td class="limited-width">${pcl}</td>	
+								<td><button class="btn btn-primary" onclick="copyToClipboard('${pcl}')">点击复制链接</button></td>
+							</tr>
+						</tbody>
+					</table>
+
+					<table class="table">
+					<thead>
+						<tr>
+							<th>Sing-box订阅链接：</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td class="limited-width">${psb}</td>	
+							<td><button class="btn btn-primary" onclick="copyToClipboard('${psb}')">点击复制链接</button></td>
+						</tr>
+					</tbody>
+				</table>
+				<br>
+				<br>
+        </div>
+    </div>
+</div>
+</body>
+`;
   }
 }
 
-/**
- * 生成通用订阅内容 (Base64编码的vless链接列表)
- * @param {string} userID
- * @param {string | null} hostName
- * @returns {string}
- */
 function gettyConfig(userID, hostName) {
-	const vlessshare = btoa(`vless://${userID}@${IP1}:${PT1}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V1_${IP1}_${PT1}\n ... (所有13个节点) ...`);
-	return vlessshare;
+  const vlessshare = btoa(
+    `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP1}:${PT1}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V1_${IP1}_${PT1}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP2}:${PT2}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V2_${IP2}_${PT2}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP3}:${PT3}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V3_${IP3}_${PT3}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP4}:${PT4}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V4_${IP4}_${PT4}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP5}:${PT5}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V5_${IP5}_${PT5}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP6}:${PT6}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V6_${IP6}_${PT6}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP7}:${PT7}?encryption=none&security=none&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V7_${IP7}_${PT7}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP8}:${PT8}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V8_${IP8}_${PT8}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP9}:${PT9}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V9_${IP9}_${PT9}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP10}:${PT10}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V10_${IP10}_${PT10}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP11}:${PT11}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V11_${IP11}_${PT11}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP12}:${PT12}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V12_${IP12}_${PT12}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP13}:${PT13}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V13_${IP13}_${PT13}`
+  );
+  return `${vlessshare}`;
 }
 
-/**
- * 生成Clash-meta格式的订阅配置文件 (YAML)
- * @param {string} userID
- * @param {string | null} hostName
- * @returns {string}
- */
 function getclConfig(userID, hostName) {
-    // 返回一个完整的Clash配置字符串，其中包含了所有13个节点。
-    // 非TLS节点 `tls: false`
-    // TLS节点 `tls: true` 和 `servername: ${hostName}`
-    return `
+  return `
 port: 7890
-...
+allow-lan: true
+mode: rule
+log-level: info
+unified-delay: true
+global-client-fingerprint: chrome
+dns:
+  enable: false
+  listen: :53
+  ipv6: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver: 
+    - 223.5.5.5
+    - 114.114.114.114
+    - 8.8.8.8
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://1.0.0.1/dns-query
+    - tls://dns.google
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+
 proxies:
 - name: CF_V1_${IP1}_${PT1}
-  type: vless
-  server: ${IP1.replace(/[\[\]]/g, '')}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP1.replace(/[\[\]]/g, "")}
   port: ${PT1}
   uuid: ${userID}
+  udp: false
   tls: false
   network: ws
   ws-opts:
     path: "/?ed=2560"
     headers:
       Host: ${hostName}
-...
+
+- name: CF_V2_${IP2}_${PT2}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP2.replace(/[\[\]]/g, "")}
+  port: ${PT2}
+  uuid: ${userID}
+  udp: false
+  tls: false
+  network: ws
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V3_${IP3}_${PT3}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP3.replace(/[\[\]]/g, "")}
+  port: ${PT3}
+  uuid: ${userID}
+  udp: false
+  tls: false
+  network: ws
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V4_${IP4}_${PT4}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP4.replace(/[\[\]]/g, "")}
+  port: ${PT4}
+  uuid: ${userID}
+  udp: false
+  tls: false
+  network: ws
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V5_${IP5}_${PT5}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP5.replace(/[\[\]]/g, "")}
+  port: ${PT5}
+  uuid: ${userID}
+  udp: false
+  tls: false
+  network: ws
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V6_${IP6}_${PT6}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP6.replace(/[\[\]]/g, "")}
+  port: ${PT6}
+  uuid: ${userID}
+  udp: false
+  tls: false
+  network: ws
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V7_${IP7}_${PT7}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP7.replace(/[\[\]]/g, "")}
+  port: ${PT7}
+  uuid: ${userID}
+  udp: false
+  tls: false
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
 - name: CF_V8_${IP8}_${PT8}
-  type: vless
-  server: ${IP8.replace(/[\[\]]/g, '')}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP8.replace(/[\[\]]/g, "")}
   port: ${PT8}
   uuid: ${userID}
+  udp: false
   tls: true
   network: ws
   servername: ${hostName}
@@ -466,91 +1177,1167 @@ proxies:
     path: "/?ed=2560"
     headers:
       Host: ${hostName}
-... (其他节点和规则) ...
-`;
-}
-	
-/**
- * 生成Sing-box格式的订阅配置文件 (JSON)
- * @param {string} userID
- * @param {string | null} hostName
- * @returns {string}
- */
-function getsbConfig(userID, hostName) {
-    // 返回一个完整的Sing-box配置字符串 (JSON格式)。
-    // 非TLS节点没有 `tls` 字段。
-    // TLS节点有 `tls` 字段，且 "enabled": true。
-    return `{
-      "outbounds": [
-        ...
-        {
-          "server": "${IP1}",
-          "server_port": ${PT1},
-          "tag": "CF_V1_${IP1}_${PT1}",
-          ...
-          "type": "vless",
-          "uuid": "${userID}"
-        },
-        ...
-        {
-          "server": "${IP8}",
-          "server_port": ${PT8},
-          "tag": "CF_V8_${IP8}_${PT8}",
-          "tls": {
-            "enabled": true,
-            "server_name": "${hostName}",
-            ...
-          },
-          ...
-          "type": "vless",
-          "uuid": "${userID}"
-        },
-        ... (其他节点和配置) ...
-      ]
-    }`;
+
+- name: CF_V9_${IP9}_${PT9}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP9.replace(/[\[\]]/g, "")}
+  port: ${PT9}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V10_${IP10}_${PT10}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP10.replace(/[\[\]]/g, "")}
+  port: ${PT10}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V11_${IP11}_${PT11}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP11.replace(/[\[\]]/g, "")}
+  port: ${PT11}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V12_${IP12}_${PT12}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP12.replace(/[\[\]]/g, "")}
+  port: ${PT12}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V13_${IP13}_${PT13}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP13.replace(/[\[\]]/g, "")}
+  port: ${PT13}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+proxy-groups:
+- name: 负载均衡
+  type: load-balance
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  proxies:
+    - CF_V1_${IP1}_${PT1}
+    - CF_V2_${IP2}_${PT2}
+    - CF_V3_${IP3}_${PT3}
+    - CF_V4_${IP4}_${PT4}
+    - CF_V5_${IP5}_${PT5}
+    - CF_V6_${IP6}_${PT6}
+    - CF_V7_${IP7}_${PT7}
+    - CF_V8_${IP8}_${PT8}
+    - CF_V9_${IP9}_${PT9}
+    - CF_V10_${IP10}_${PT10}
+    - CF_V11_${IP11}_${PT11}
+    - CF_V12_${IP12}_${PT12}
+    - CF_V13_${IP13}_${PT13}
+
+- name: 自动选择
+  type: url-test
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  tolerance: 50
+  proxies:
+    - CF_V1_${IP1}_${PT1}
+    - CF_V2_${IP2}_${PT2}
+    - CF_V3_${IP3}_${PT3}
+    - CF_V4_${IP4}_${PT4}
+    - CF_V5_${IP5}_${PT5}
+    - CF_V6_${IP6}_${PT6}
+    - CF_V7_${IP7}_${PT7}
+    - CF_V8_${IP8}_${PT8}
+    - CF_V9_${IP9}_${PT9}
+    - CF_V10_${IP10}_${PT10}
+    - CF_V11_${IP11}_${PT11}
+    - CF_V12_${IP12}_${PT12}
+    - CF_V13_${IP13}_${PT13}
+
+- name: 🌍选择代理
+  type: select
+  proxies:
+    - 负载均衡
+    - 自动选择
+    - DIRECT
+    - CF_V1_${IP1}_${PT1}
+    - CF_V2_${IP2}_${PT2}
+    - CF_V3_${IP3}_${PT3}
+    - CF_V4_${IP4}_${PT4}
+    - CF_V5_${IP5}_${PT5}
+    - CF_V6_${IP6}_${PT6}
+    - CF_V7_${IP7}_${PT7}
+    - CF_V8_${IP8}_${PT8}
+    - CF_V9_${IP9}_${PT9}
+    - CF_V10_${IP10}_${PT10}
+    - CF_V11_${IP11}_${PT11}
+    - CF_V12_${IP12}_${PT12}
+    - CF_V13_${IP13}_${PT13}
+
+rules:
+  - GEOIP,LAN,DIRECT
+  - GEOIP,CN,DIRECT
+  - MATCH,🌍选择代理`;
 }
 
-// 以下是仅生成TLS节点的订阅配置函数
+function getsbConfig(userID, hostName) {
+  return `{
+	  "log": {
+		"disabled": false,
+		"level": "info",
+		"timestamp": true
+	  },
+	  "experimental": {
+		"clash_api": {
+		  "external_controller": "127.0.0.1:9090",
+		  "external_ui": "ui",
+		  "external_ui_download_url": "",
+		  "external_ui_download_detour": "",
+		  "secret": "",
+		  "default_mode": "Rule"
+		},
+		"cache_file": {
+		  "enabled": true,
+		  "path": "cache.db",
+		  "store_fakeip": true
+		}
+	  },
+	  "dns": {
+		"servers": [
+		  {
+			"tag": "proxydns",
+			"address": "tls://8.8.8.8/dns-query",
+			"detour": "select"
+		  },
+		  {
+			"tag": "localdns",
+			"address": "h3://223.5.5.5/dns-query",
+			"detour": "direct"
+		  },
+		  {
+			"tag": "dns_fakeip",
+			"address": "fakeip"
+		  }
+		],
+		"rules": [
+		  {
+			"outbound": "any",
+			"server": "localdns",
+			"disable_cache": true
+		  },
+		  {
+			"clash_mode": "Global",
+			"server": "proxydns"
+		  },
+		  {
+			"clash_mode": "Direct",
+			"server": "localdns"
+		  },
+		  {
+			"rule_set": "geosite-cn",
+			"server": "localdns"
+		  },
+		  {
+			"rule_set": "geosite-geolocation-!cn",
+			"server": "proxydns"
+		  },
+		  {
+			"rule_set": "geosite-geolocation-!cn",
+			"query_type": [
+			  "A",
+			  "AAAA"
+			],
+			"server": "dns_fakeip"
+		  }
+		],
+		"fakeip": {
+		  "enabled": true,
+		  "inet4_range": "198.18.0.0/15",
+		  "inet6_range": "fc00::/18"
+		},
+		"independent_cache": true,
+		"final": "proxydns"
+	  },
+	  "inbounds": [
+		{
+		  "type": "tun",
+                  "tag": "tun-in",
+		  "address": [
+                    "172.19.0.1/30",
+		    "fd00::1/126"
+      ],
+		  "auto_route": true,
+		  "strict_route": true,
+		  "sniff": true,
+		  "sniff_override_destination": true,
+		  "domain_strategy": "prefer_ipv4"
+		}
+	  ],
+	  "outbounds": [
+		{
+		  "tag": "select",
+		  "type": "selector",
+		  "default": "auto",
+		  "outbounds": [
+			"auto",
+			"CF_V1_${IP1}_${PT1}",
+			"CF_V2_${IP2}_${PT2}",
+			"CF_V3_${IP3}_${PT3}",
+			"CF_V4_${IP4}_${PT4}",
+			"CF_V5_${IP5}_${PT5}",
+			"CF_V6_${IP6}_${PT6}",
+			"CF_V7_${IP7}_${PT7}",
+			"CF_V8_${IP8}_${PT8}",
+			"CF_V9_${IP9}_${PT9}",
+			"CF_V10_${IP10}_${PT10}",
+			"CF_V11_${IP11}_${PT11}",
+			"CF_V12_${IP12}_${PT12}",
+			"CF_V13_${IP13}_${PT13}"
+		  ]
+		},
+		{
+		  "server": "${IP1}",
+		  "server_port": ${PT1},
+		  "tag": "CF_V1_${IP1}_${PT1}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP2}",
+		  "server_port": ${PT2},
+		  "tag": "CF_V2_${IP2}_${PT2}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP3}",
+		  "server_port": ${PT3},
+		  "tag": "CF_V3_${IP3}_${PT3}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP4}",
+		  "server_port": ${PT4},
+		  "tag": "CF_V4_${IP4}_${PT4}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP5}",
+		  "server_port": ${PT5},
+		  "tag": "CF_V5_${IP5}_${PT5}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP6}",
+		  "server_port": ${PT6},
+		  "tag": "CF_V6_${IP6}_${PT6}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP7}",
+		  "server_port": ${PT7},
+		  "tag": "CF_V7_${IP7}_${PT7}",
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{     
+		  "server": "${IP8}",
+		  "server_port": ${PT8},
+		  "tag": "CF_V8_${IP8}_${PT8}",
+		  "tls": {
+			"enabled": true,
+			"server_name": "${hostName}",
+			"insecure": false,
+			"utls": {
+			  "enabled": true,
+			  "fingerprint": "chrome"
+			}
+		  },
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP9}",
+		  "server_port": ${PT9},
+		  "tag": "CF_V9_${IP9}_${PT9}",
+		  "tls": {
+			"enabled": true,
+			"server_name": "${hostName}",
+			"insecure": false,
+			"utls": {
+			  "enabled": true,
+			  "fingerprint": "chrome"
+			}
+		  },
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP10}",
+		  "server_port": ${PT10},
+		  "tag": "CF_V10_${IP10}_${PT10}",
+		  "tls": {
+			"enabled": true,
+			"server_name": "${hostName}",
+			"insecure": false,
+			"utls": {
+			  "enabled": true,
+			  "fingerprint": "chrome"
+			}
+		  },
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP11}",
+		  "server_port": ${PT11},
+		  "tag": "CF_V11_${IP11}_${PT11}",
+		  "tls": {
+			"enabled": true,
+			"server_name": "${hostName}",
+			"insecure": false,
+			"utls": {
+			  "enabled": true,
+			  "fingerprint": "chrome"
+			}
+		  },
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP12}",
+		  "server_port": ${PT12},
+		  "tag": "CF_V12_${IP12}_${PT12}",
+		  "tls": {
+			"enabled": true,
+			"server_name": "${hostName}",
+			"insecure": false,
+			"utls": {
+			  "enabled": true,
+			  "fingerprint": "chrome"
+			}
+		  },
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "server": "${IP13}",
+		  "server_port": ${PT13},
+		  "tag": "CF_V13_${IP13}_${PT13}",
+		  "tls": {
+			"enabled": true,
+			"server_name": "${hostName}",
+			"insecure": false,
+			"utls": {
+			  "enabled": true,
+			  "fingerprint": "chrome"
+			}
+		  },
+		  "packet_encoding": "packetaddr",
+		  "transport": {
+			"headers": {
+			  "Host": [
+				"${hostName}"
+			  ]
+			},
+			"path": "/?ed=2560",
+			"type": "ws"
+		  },
+		  "type": "\u0076\u006c\u0065\u0073\u0073",
+		  "uuid": "${userID}"
+		},
+		{
+		  "tag": "direct",
+		  "type": "direct"
+		},
+		{
+		  "tag": "auto",
+		  "type": "urltest",
+		  "outbounds": [
+			"CF_V1_${IP1}_${PT1}",
+			"CF_V2_${IP2}_${PT2}",
+			"CF_V3_${IP3}_${PT3}",
+			"CF_V4_${IP4}_${PT4}",
+			"CF_V5_${IP5}_${PT5}",
+			"CF_V6_${IP6}_${PT6}",
+			"CF_V7_${IP7}_${PT7}",
+			"CF_V8_${IP8}_${PT8}",
+			"CF_V9_${IP9}_${PT9}",
+			"CF_V10_${IP10}_${PT10}",
+			"CF_V11_${IP11}_${PT11}",
+			"CF_V12_${IP12}_${PT12}",
+			"CF_V13_${IP13}_${PT13}"
+		  ],
+		  "url": "https://www.gstatic.com/generate_204",
+		  "interval": "1m",
+		  "tolerance": 50,
+		  "interrupt_exist_connections": false
+		}
+	  ],
+	  "route": {
+		"rule_set": [
+		  {
+			"tag": "geosite-geolocation-!cn",
+			"type": "remote",
+			"format": "binary",
+			"url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-!cn.srs",
+			"download_detour": "select",
+			"update_interval": "1d"
+		  },
+		  {
+			"tag": "geosite-cn",
+			"type": "remote",
+			"format": "binary",
+			"url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-cn.srs",
+			"download_detour": "select",
+			"update_interval": "1d"
+		  },
+		  {
+			"tag": "geoip-cn",
+			"type": "remote",
+			"format": "binary",
+			"url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs",
+			"download_detour": "select",
+			"update_interval": "1d"
+		  }
+		],
+		"auto_detect_interface": true,
+		"final": "select",
+		"rules": [
+                         {
+                        "inbound": "tun-in",
+                        "action": "sniff"
+                         },
+                          {
+                        "protocol": "dns",
+                           "action": "hijack-dns"
+                         },
+                        {
+                        "port": 443,
+                        "network": "udp",
+                        "action": "reject"
+                         },
+		  {
+			"clash_mode": "Direct",
+			"outbound": "direct"
+		  },
+		  {
+			"clash_mode": "Global",
+			"outbound": "select"
+		  },
+		  {
+			"rule_set": "geoip-cn",
+			"outbound": "direct"
+		  },
+		  {
+			"rule_set": "geosite-cn",
+			"outbound": "direct"
+		  },
+		  {
+			"ip_is_private": true,
+			"outbound": "direct"
+		  },
+		  {
+			"rule_set": "geosite-geolocation-!cn",
+			"outbound": "select"
+		  }
+		]
+	  },
+	  "ntp": {
+		"enabled": true,
+		"server": "time.apple.com",
+		"server_port": 123,
+		"interval": "30m",
+		"detour": "direct"
+	  }
+	}`;
+}
 
 function getptyConfig(userID, hostName) {
-	const vlessshare = btoa(`vless://${userID}@${IP8}:${PT8}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V8_${IP8}_${PT8}\n ... (所有6个TLS节点) ...`);
-	return vlessshare;
+  const vlessshare = btoa(
+    `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP8}:${PT8}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V8_${IP8}_${PT8}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP9}:${PT9}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V9_${IP9}_${PT9}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP10}:${PT10}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V10_${IP10}_${PT10}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP11}:${PT11}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V11_${IP11}_${PT11}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP12}:${PT12}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V12_${IP12}_${PT12}\n\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${IP13}:${PT13}?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#CF_V13_${IP13}_${PT13}`
+  );
+  return `${vlessshare}`;
 }
-	
+
 function getpclConfig(userID, hostName) {
-    // 返回Clash配置，但只包含proxies数组中的TLS节点 (IP8-IP13)。
-    return `
-...
+  return `
+port: 7890
+allow-lan: true
+mode: rule
+log-level: info
+unified-delay: true
+global-client-fingerprint: chrome
+dns:
+  enable: false
+  listen: :53
+  ipv6: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  default-nameserver: 
+    - 223.5.5.5
+    - 114.114.114.114
+    - 8.8.8.8
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  fallback:
+    - https://1.0.0.1/dns-query
+    - tls://dns.google
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+
 proxies:
 - name: CF_V8_${IP8}_${PT8}
-  type: vless
-  server: ${IP8.replace(/[\[\]]/g, '')}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP8.replace(/[\[\]]/g, "")}
   port: ${PT8}
   uuid: ${userID}
+  udp: false
   tls: true
-  ...
-... (其他TLS节点和规则) ...
-`;
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V9_${IP9}_${PT9}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP9.replace(/[\[\]]/g, "")}
+  port: ${PT9}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V10_${IP10}_${PT10}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP10.replace(/[\[\]]/g, "")}
+  port: ${PT10}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V11_${IP11}_${PT11}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP11.replace(/[\[\]]/g, "")}
+  port: ${PT11}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V12_${IP12}_${PT12}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP12.replace(/[\[\]]/g, "")}
+  port: ${PT12}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+- name: CF_V13_${IP13}_${PT13}
+  type: \u0076\u006c\u0065\u0073\u0073
+  server: ${IP13.replace(/[\[\]]/g, "")}
+  port: ${PT13}
+  uuid: ${userID}
+  udp: false
+  tls: true
+  network: ws
+  servername: ${hostName}
+  ws-opts:
+    path: "/?ed=2560"
+    headers:
+      Host: ${hostName}
+
+proxy-groups:
+- name: 负载均衡
+  type: load-balance
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  proxies:
+    - CF_V8_${IP8}_${PT8}
+    - CF_V9_${IP9}_${PT9}
+    - CF_V10_${IP10}_${PT10}
+    - CF_V11_${IP11}_${PT11}
+    - CF_V12_${IP12}_${PT12}
+    - CF_V13_${IP13}_${PT13}
+
+- name: 自动选择
+  type: url-test
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  tolerance: 50
+  proxies:
+    - CF_V8_${IP8}_${PT8}
+    - CF_V9_${IP9}_${PT9}
+    - CF_V10_${IP10}_${PT10}
+    - CF_V11_${IP11}_${PT11}
+    - CF_V12_${IP12}_${PT12}
+    - CF_V13_${IP13}_${PT13}
+
+- name: 🌍选择代理
+  type: select
+  proxies:
+    - 负载均衡
+    - 自动选择
+    - DIRECT
+    - CF_V8_${IP8}_${PT8}
+    - CF_V9_${IP9}_${PT9}
+    - CF_V10_${IP10}_${PT10}
+    - CF_V11_${IP11}_${PT11}
+    - CF_V12_${IP12}_${PT12}
+    - CF_V13_${IP13}_${PT13}
+
+rules:
+  - GEOIP,LAN,DIRECT
+  - GEOIP,CN,DIRECT
+  - MATCH,🌍选择代理`;
 }
-		
+
 function getpsbConfig(userID, hostName) {
-    // 返回Sing-box配置，但只包含outbounds数组中的TLS节点 (IP8-IP13)。
-    return `{
-      "outbounds": [
-        ...
-        {
-          "server": "${IP8}",
-          "server_port": ${PT8},
-          "tag": "CF_V8_${IP8}_${PT8}",
-          "tls": {
-            "enabled": true,
-            ...
-          },
-          ...
-          "type": "vless",
-          "uuid": "${userID}"
-        },
-        ... (其他TLS节点和配置) ...
-      ]
-    }`;
+  return `{
+		  "log": {
+			"disabled": false,
+			"level": "info",
+			"timestamp": true
+		  },
+		  "experimental": {
+			"clash_api": {
+			  "external_controller": "127.0.0.1:9090",
+			  "external_ui": "ui",
+			  "external_ui_download_url": "",
+			  "external_ui_download_detour": "",
+			  "secret": "",
+			  "default_mode": "Rule"
+			},
+			"cache_file": {
+			  "enabled": true,
+			  "path": "cache.db",
+			  "store_fakeip": true
+			}
+		  },
+		  "dns": {
+			"servers": [
+			  {
+				"tag": "proxydns",
+				"address": "tls://8.8.8.8/dns-query",
+				"detour": "select"
+			  },
+			  {
+				"tag": "localdns",
+				"address": "h3://223.5.5.5/dns-query",
+				"detour": "direct"
+			  },
+			  {
+				"tag": "dns_fakeip",
+				"address": "fakeip"
+			  }
+			],
+			"rules": [
+			  {
+				"outbound": "any",
+				"server": "localdns",
+				"disable_cache": true
+			  },
+			  {
+				"clash_mode": "Global",
+				"server": "proxydns"
+			  },
+			  {
+				"clash_mode": "Direct",
+				"server": "localdns"
+			  },
+			  {
+				"rule_set": "geosite-cn",
+				"server": "localdns"
+			  },
+			  {
+				"rule_set": "geosite-geolocation-!cn",
+				"server": "proxydns"
+			  },
+			  {
+				"rule_set": "geosite-geolocation-!cn",
+				"query_type": [
+				  "A",
+				  "AAAA"
+				],
+				"server": "dns_fakeip"
+			  }
+			],
+			"fakeip": {
+			  "enabled": true,
+			  "inet4_range": "198.18.0.0/15",
+			  "inet6_range": "fc00::/18"
+			},
+			"independent_cache": true,
+			"final": "proxydns"
+		  },
+		  "inbounds": [
+			{
+			  "type": "tun",
+                        "tag": "tun-in",
+		  "address": [
+                    "172.19.0.1/30",
+		    "fd00::1/126"
+      ],
+			  "auto_route": true,
+			  "strict_route": true,
+			  "sniff": true,
+			  "sniff_override_destination": true,
+			  "domain_strategy": "prefer_ipv4"
+			}
+		  ],
+		  "outbounds": [
+			{
+			  "tag": "select",
+			  "type": "selector",
+			  "default": "auto",
+			  "outbounds": [
+				"auto",
+				"CF_V8_${IP8}_${PT8}",
+				"CF_V9_${IP9}_${PT9}",
+				"CF_V10_${IP10}_${PT10}",
+				"CF_V11_${IP11}_${PT11}",
+				"CF_V12_${IP12}_${PT12}",
+				"CF_V13_${IP13}_${PT13}"
+			  ]
+			},
+			{
+			  "server": "${IP8}",
+			  "server_port": ${PT8},
+			  "tag": "CF_V8_${IP8}_${PT8}",
+			  "tls": {
+				"enabled": true,
+				"server_name": "${hostName}",
+				"insecure": false,
+				"utls": {
+				  "enabled": true,
+				  "fingerprint": "chrome"
+				}
+			  },
+			  "packet_encoding": "packetaddr",
+			  "transport": {
+				"headers": {
+				  "Host": [
+					"${hostName}"
+				  ]
+				},
+				"path": "/?ed=2560",
+				"type": "ws"
+			  },
+			  "type": "\u0076\u006c\u0065\u0073\u0073",
+			  "uuid": "${userID}"
+			},
+			{
+			  "server": "${IP9}",
+			  "server_port": ${PT9},
+			  "tag": "CF_V9_${IP9}_${PT9}",
+			  "tls": {
+				"enabled": true,
+				"server_name": "${hostName}",
+				"insecure": false,
+				"utls": {
+				  "enabled": true,
+				  "fingerprint": "chrome"
+				}
+			  },
+			  "packet_encoding": "packetaddr",
+			  "transport": {
+				"headers": {
+				  "Host": [
+					"${hostName}"
+				  ]
+				},
+				"path": "/?ed=2560",
+				"type": "ws"
+			  },
+			  "type": "\u0076\u006c\u0065\u0073\u0073",
+			  "uuid": "${userID}"
+			},
+			{
+			  "server": "${IP10}",
+			  "server_port": ${PT10},
+			  "tag": "CF_V10_${IP10}_${PT10}",
+			  "tls": {
+				"enabled": true,
+				"server_name": "${hostName}",
+				"insecure": false,
+				"utls": {
+				  "enabled": true,
+				  "fingerprint": "chrome"
+				}
+			  },
+			  "packet_encoding": "packetaddr",
+			  "transport": {
+				"headers": {
+				  "Host": [
+					"${hostName}"
+				  ]
+				},
+				"path": "/?ed=2560",
+				"type": "ws"
+			  },
+			  "type": "\u0076\u006c\u0065\u0073\u0073",
+			  "uuid": "${userID}"
+			},
+			{
+			  "server": "${IP11}",
+			  "server_port": ${PT11},
+			  "tag": "CF_V11_${IP11}_${PT11}",
+			  "tls": {
+				"enabled": true,
+				"server_name": "${hostName}",
+				"insecure": false,
+				"utls": {
+				  "enabled": true,
+				  "fingerprint": "chrome"
+				}
+			  },
+			  "packet_encoding": "packetaddr",
+			  "transport": {
+				"headers": {
+				  "Host": [
+					"${hostName}"
+				  ]
+				},
+				"path": "/?ed=2560",
+				"type": "ws"
+			  },
+			  "type": "\u0076\u006c\u0065\u0073\u0073",
+			  "uuid": "${userID}"
+			},
+			{
+			  "server": "${IP12}",
+			  "server_port": ${PT12},
+			  "tag": "CF_V12_${IP12}_${PT12}",
+			  "tls": {
+				"enabled": true,
+				"server_name": "${hostName}",
+				"insecure": false,
+				"utls": {
+				  "enabled": true,
+				  "fingerprint": "chrome"
+				}
+			  },
+			  "packet_encoding": "packetaddr",
+			  "transport": {
+				"headers": {
+				  "Host": [
+					"${hostName}"
+				  ]
+				},
+				"path": "/?ed=2560",
+				"type": "ws"
+			  },
+			  "type": "\u0076\u006c\u0065\u0073\u0073",
+			  "uuid": "${userID}"
+			},
+			{
+			  "server": "${IP13}",
+			  "server_port": ${PT13},
+			  "tag": "CF_V13_${IP13}_${PT13}",
+			  "tls": {
+				"enabled": true,
+				"server_name": "${hostName}",
+				"insecure": false,
+				"utls": {
+				  "enabled": true,
+				  "fingerprint": "chrome"
+				}
+			  },
+			  "packet_encoding": "packetaddr",
+			  "transport": {
+				"headers": {
+				  "Host": [
+					"${hostName}"
+				  ]
+				},
+				"path": "/?ed=2560",
+				"type": "ws"
+			  },
+			  "type": "\u0076\u006c\u0065\u0073\u0073",
+			  "uuid": "${userID}"
+			},
+			{
+			  "tag": "direct",
+			  "type": "direct"
+			},
+			{
+			  "tag": "auto",
+			  "type": "urltest",
+			  "outbounds": [
+				"CF_V8_${IP8}_${PT8}",
+				"CF_V9_${IP9}_${PT9}",
+				"CF_V10_${IP10}_${PT10}",
+				"CF_V11_${IP11}_${PT11}",
+				"CF_V12_${IP12}_${PT12}",
+				"CF_V13_${IP13}_${PT13}"
+			  ],
+			  "url": "https://www.gstatic.com/generate_204",
+			  "interval": "1m",
+			  "tolerance": 50,
+			  "interrupt_exist_connections": false
+			}
+		  ],
+		  "route": {
+			"rule_set": [
+			  {
+				"tag": "geosite-geolocation-!cn",
+				"type": "remote",
+				"format": "binary",
+				"url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-!cn.srs",
+				"download_detour": "select",
+				"update_interval": "1d"
+			  },
+			  {
+				"tag": "geosite-cn",
+				"type": "remote",
+				"format": "binary",
+				"url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/geolocation-cn.srs",
+				"download_detour": "select",
+				"update_interval": "1d"
+			  },
+			  {
+				"tag": "geoip-cn",
+				"type": "remote",
+				"format": "binary",
+				"url": "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs",
+				"download_detour": "select",
+				"update_interval": "1d"
+			  }
+			],
+			"auto_detect_interface": true,
+			"final": "select",
+			"rules": [
+                          {
+                         "inbound": "tun-in",
+                          "action": "sniff"
+                          },
+                          {
+                          "protocol": "dns",
+                          "action": "hijack-dns"
+                           },
+                          {
+                           "port": 443,
+                          "network": "udp",
+                          "action": "reject"
+                          },
+			  {
+				"clash_mode": "Direct",
+				"outbound": "direct"
+			  },
+			  {
+				"clash_mode": "Global",
+				"outbound": "select"
+			  },
+			  {
+				"rule_set": "geoip-cn",
+				"outbound": "direct"
+			  },
+			  {
+				"rule_set": "geosite-cn",
+				"outbound": "direct"
+			  },
+			  {
+				"ip_is_private": true,
+				"outbound": "direct"
+			  },
+			  {
+				"rule_set": "geosite-geolocation-!cn",
+				"outbound": "select"
+			  }
+			]
+		  },
+		  "ntp": {
+			"enabled": true,
+			"server": "time.apple.com",
+			"server_port": 123,
+			"interval": "30m",
+			"detour": "direct"
+		  }
+		}`;
 }
