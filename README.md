@@ -5,6 +5,10 @@
 高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！以后也用不着搭建什么 proxyip 节点，搭 nat64 网关就行👍
 
 
+## 视频教程
+
+https://youtu.be/HQcLxYbPSgo
+
 ## 固定ip，解决 twitch 无法观看 1080p 直播
 
 我在涌哥的脚本基础上，增加了自定义 proxydomains 变量，因此现在可以将需要固定ip访问的网站设置到 proxydomains 变量中，这样就不会跳 ip 了。
