@@ -7,7 +7,9 @@
 
 ## 视频教程
 
-https://youtu.be/HQcLxYbPSgo
+workers 代理搭建： https://youtu.be/HQcLxYbPSgo
+
+workers 代理优选IP：https://youtu.be/egjPHBbd9zw
 
 ## 固定ip，解决 twitch 无法观看 1080p 直播
 
