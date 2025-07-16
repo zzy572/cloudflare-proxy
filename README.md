@@ -2,7 +2,7 @@
 
 > 原项目：[https://github.com/yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan)
 
-高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！以后也用不着搭建什么 proxyip 节点，搭 nat64 网关就行👍
+高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题
 
 
 ## 视频教程
@@ -20,6 +20,9 @@ https://youtu.be/HQcLxYbPSgo
 | 变量作用 | 变量名称 | 变量值要求 | 变量默认值 | 变量要求 |
 |---------|----------|------------|------------|----------|
 | 1、必要的uuid | uuid (小写字母) | 符合uuid规定格式 | 万人骑uuid：86c50e3a-5b87-49dd-bd20-03c7f2735e40 | 建议 |
+| 2、订阅节点：优选IP | ip1到ip13，共13个 | CF官方IP、CF反代IP、CF优选域名 | CF官方不同地区的visa域名 | 可选 |
+| 3、订阅节点：优选IP对应端口 | pt1到pt13，共13个 | CF13个标准端口、反代IP对应任意端口 | CF13个标准端口 | 可选 |
+| 4、需要固定ip访问的网站 | proxydomains | 域名之间使用","分割 | "twitch.tv","ttvnw.net" | 可选 |
 
 ### 原理
 下面的解释来自 gemini 2.5 pro，最后的地方它说错了，cloudflare 出口ip是同时拥有ipv4和ipv6的，但是优先使用ipv6，所以在访问推特等仅支持 ipv4 网站时就会失败。
