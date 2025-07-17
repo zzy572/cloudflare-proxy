@@ -4,7 +4,6 @@
 
 高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题
 
-
 ## 视频教程
 
 workers 代理搭建： https://youtu.be/HQcLxYbPSgo
@@ -14,6 +13,8 @@ workers 代理优选IP：https://youtu.be/egjPHBbd9zw
 ## 固定ip，解决 twitch 无法观看 1080p 直播
 
 我在涌哥的脚本基础上，增加了自定义 proxydomains 变量，因此现在可以将需要固定ip访问的网站设置到 proxydomains 变量中，这样就不会跳 ip 了。
+
+**注意，本项目提供的 [worker-trojan-proxyip](./worker-trojan-proxyip.js) 和 [worker-vless-proxyip](./worker-vless-proxyip.js)，均未内置 proxyip，需要自己在变量中设置；[worker-vless-nat64](./worker-vless-nat64.js) 则内置了公共 NAT64 节点**
 
 ## 变量设置
 
