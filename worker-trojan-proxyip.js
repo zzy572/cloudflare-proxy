@@ -649,7 +649,7 @@ function getygkkkConfig(Pswd, hostName) {
       `\u0074\u0072\u006F\u006A\u0061\u006E://${Pswd}@${CDNIP}:8443?security=tls&type=ws&host=${hostName}&sni=${hostName}&fp=random&path=%2F%3Fed%3D2560#${hostName}`
     )
   );
-  const note = `甬哥博客地址：https://ygkkk.blogspot.com\n甬哥YouTube频道：https://www.youtube.com/@ygkkk\n甬哥TG电报群组：https://t.me/ygkkktg\n甬哥TG电报频道：https://t.me/ygkkktgpd\n\nProxyIP全局运行中：${proxyIP}:${proxyPort}`;
+  const note = `阿杰鲁博客地址：https://ajie.lu\n阿杰鲁YouTube频道：https://www.youtube.com/@zaunist\n阿杰鲁TG电报群组：https://t.me/zaunist\n\nProxyIP全局运行中：${proxyIP}:${proxyPort}`;
   const ty = `https://${hostName}/${Pswd}/ty`;
   const cl = `https://${hostName}/${Pswd}/cl`;
   const sb = `https://${hostName}/${Pswd}/sb`;
@@ -703,7 +703,7 @@ ${displayHtml}
 <div class="container">
     <div class="row">
         <div class="col-md-12">
-            <h1>Cloudflare-workers/pages-\u0074\u0072\u006F\u006A\u0061\u006E代理脚本 V25.5.4</h1>
+            <h1>Cloudflare-workers/pages-\u0074\u0072\u006F\u006A\u0061\u006E代理脚本 V25.7.25</h1>
 			<hr>
             <p>${noteshow}</p>
             <hr>
@@ -850,7 +850,7 @@ ${displayHtml}
 <div class="container">
     <div class="row">
         <div class="col-md-12">
-            <h1>Cloudflare-workers/pages-\u0074\u0072\u006F\u006A\u0061\u006E代理脚本 V25.5.4</h1>
+            <h1>Cloudflare-workers/pages-\u0074\u0072\u006F\u006A\u0061\u006E代理脚本 V25.7.25</h1>
 			<hr>
             <p>${noteshow}</p>
             <hr>

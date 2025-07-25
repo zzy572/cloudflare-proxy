@@ -2,7 +2,9 @@
 
 > 原项目：[https://github.com/yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan)
 
-高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题
+~~高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题~~
+
+目前 NAT64 节点已经挂了，不过 NAT64 的方案仍然可行，等到有新的可用的 NAT64 节点再更新 [NAT64 脚本](./worker-vless-nat64.js)
 
 ## 视频教程
 
@@ -14,11 +16,19 @@ workers 代理优选IP：https://youtu.be/egjPHBbd9zw
 
 我在涌哥的脚本基础上，增加了自定义 proxydomains 变量，因此现在可以将需要固定ip访问的网站设置到 proxydomains 变量中，这样就不会跳 ip 了。
 
-**注意，本项目提供的 [worker-trojan-proxyip](./worker-trojan-proxyip.js) 和 [worker-vless-proxyip](./worker-vless-proxyip.js)，均未内置 proxyip，需要自己在变量中设置；[worker-vless-nat64](./worker-vless-nat64.js) 则内置了公共 NAT64 节点**
+## 禁用 proxyip 的 ipv6，解决无法访问 ipv4 only 的网站（例如推特）
 
-## 变量设置
+相信很多小伙伴在使用 cloudflare 搭建的 workers 节点时都会遇到同样的一个问题，那就是无法访问推特。这是因为推特目前不支持使用 ipv6 访问，而 cf workers 默认使用 ipv6 访问，此时会访问失败，然后会尝试使用 proxyip 去访问，假如你的 proxyip 节点也是优先使用 ipv6 访问的，那么就会失败。
+为了解决这个问题，推荐使用一个 ipv4 only 的 proxyip，当然，这样会增加 proxyip 节点被网络上的大佬扫描出来的风险，但是不这样做就没法达到访问 ipv4 only 网站的效果。
+网络上有一些公开的 proxyip 的域名，其中有一些是使用脚本自动更新，会定时扫描互联网上的 proxyip，使用一个域名可以解析出来相当多的 proxyip 的地址，这种时候会有一个问题，假如你本次访问正好解析出来的是一个 ipv4 only 的 proxyip，那么你就可以访问推特，假如域名解析出来的 proxyip 是带有 ipv6 地址，那你就没法访问推特。
+有条件的小伙伴建议自己搭建一个 proxyip 节点，禁用 ipv6 以后，注意保护好信息，尽量避免泄漏。
+
+**注意，本项目提供的 [worker-trojan-proxyip](./worker-trojan-proxyip.js) 和 [worker-vless-proxyip](./worker-vless-proxyip.js)，均未内置 proxyip，需要自己在变量中设置；~~[worker-vless-nat64](./worker-vless-nat64.js) 则内置了公共 NAT64 节点~~，NAT64 节点已挂，望周知**
+
+## worker-vless-proxyip 脚本变量设置
 
 **只需要设置 uuid 就行，如果不担心被其他人扫到，uuid 都不需要改，不过还是建议修改**
+**建议搭配 ipv4 only 的 proxyip 使用**
 
 | 变量作用 | 变量名称 | 变量值要求 | 变量默认值 | 变量要求 |
 |---------|----------|------------|------------|----------|
@@ -26,8 +36,22 @@ workers 代理优选IP：https://youtu.be/egjPHBbd9zw
 | 2、订阅节点：优选IP | ip1到ip13，共13个 | CF官方IP、CF反代IP、CF优选域名 | CF官方不同地区的visa域名 | 可选 |
 | 3、订阅节点：优选IP对应端口 | pt1到pt13，共13个 | CF13个标准端口、反代IP对应任意端口 | CF13个标准端口 | 可选 |
 | 4、需要固定ip访问的网站 | proxydomains | 域名之间使用","分割 | "twitch.tv","ttvnw.net" | 可选 |
+| 5、proxyip | proxyip | 域名:端口 | "" | 可选 |
 
-### 原理
+## worker-trojan-proxyip 脚本变量设置
+
+**只需要设置 pswd 就行，如果不担心被其他人扫到，pswd 都不需要改，不过还是建议修改**
+**建议搭配 ipv4 only 的 proxyip 使用**
+
+| 变量作用 | 变量名称 | 变量值要求 | 变量默认值 | 变量要求 |
+|---------|---------|-----------|-----------|---------|
+| 1、必要的密码 | pswd (小写字母) | 建议字母数字 | 万人骑密码：trojan | 建议 |
+| 2、全局节点能上CF类网站 | proxyip (小写字母) | 443端口：ipv4地址、[ipv6地址]、域名。非443端口：IPV4地址:端口、[IPV6地址]:端口、域名:端口 | proxyip：留空 | 可选 |
+| 3、订阅节点：优选IP | ip1到ip13，共13个 | CF官方IP、CF反代IP、CF优选域名 | CF官方不同地区的visa域名 | 可选 |
+| 4、订阅节点：优选IP对应端口 | pt1到pt13，共13个 | CF13个标准端口、反代IP对应任意端口 | CF13个标准端口 | 可选 |
+| 5、需要固定ip访问的网站 | proxydomains | 域名之间使用","分割 | "twitch.tv","ttvnw.net" | 可选 |
+
+### worker-vless-nat64 脚本原理
 下面的解释来自 gemini 2.5 pro，最后的地方它说错了，cloudflare 出口ip是同时拥有ipv4和ipv6的，但是优先使用ipv6，所以在访问推特等仅支持 ipv4 网站时就会失败。
 
 ```

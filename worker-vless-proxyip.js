@@ -987,7 +987,7 @@ async function handleUDPOutBound(webSocket, cloudflareResponseHeader, log) {
 function getvlessConfig(userID, hostName) {
   const wvlessws = `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${CDNIP}:8880?encryption=none&security=none&type=ws&host=${hostName}&path=%2F%3Fed%3D2560#${hostName}`;
   const pvlesswstls = `\u0076\u006c\u0065\u0073\u0073\u003A//${userID}\u0040${CDNIP}:8443?encryption=none&security=tls&type=ws&host=${hostName}&sni=${hostName}&fp=random&path=%2F%3Fed%3D2560#${hostName}`;
-  const note = `甬哥博客地址：https://ygkkk.blogspot.com\n甬哥YouTube频道：https://www.youtube.com/@ygkkk\n甬哥TG电报群组：https://t.me/ygkkktg\n甬哥TG电报频道：https://t.me/ygkkktgpd\n\nProxyIP全局运行中：${proxyIP}:${proxyPort}`;
+  const note = `阿杰鲁博客地址：https://ajie.lu\n阿杰鲁YouTube频道：https://www.youtube.com/@zaunist\n阿杰鲁TG电报群组：https://t.me/zaunist\n\nProxyIP全局运行中：${proxyIP}:${proxyPort}`;
   const ty = `https://${hostName}/${userID}/ty`;
   const cl = `https://${hostName}/${userID}/cl`;
   const sb = `https://${hostName}/${userID}/sb`;
@@ -1041,7 +1041,7 @@ ${displayHtml}
 <div class="container">
     <div class="row">
         <div class="col-md-12">
-            <h1>Cloudflare-workers/pages-\u0076\u006c\u0065\u0073\u0073代理脚本 V25.5.4</h1>
+            <h1>Cloudflare-workers/pages-\u0076\u006c\u0065\u0073\u0073代理脚本 V25.7.25</h1>
 	    <hr>
             <p>${noteshow}</p>
             <hr>
@@ -1190,7 +1190,7 @@ ${displayHtml}
 <div class="container">
     <div class="row">
         <div class="col-md-12">
-            <h1>Cloudflare-workers/pages-\u0076\u006c\u0065\u0073\u0073代理脚本 V25.5.4</h1>
+            <h1>Cloudflare-workers/pages-\u0076\u006c\u0065\u0073\u0073代理脚本 V25.7.25</h1>
 			<hr>
             <p>${noteshow}</p>
             <hr>
