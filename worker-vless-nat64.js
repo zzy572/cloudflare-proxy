@@ -4,7 +4,7 @@ const WS_READY_STATE_OPEN = 1;
 let userID = "86c50e3a-5b87-49dd-bd20-03c7f2735e40";
 const cn_hostnames = [""];
 // 添加需要直接使用NAT64的域名列表，支持从环境变量扩展
-let proxydomains = ["twitch.tv","ttvnw.net"];
+let proxydomains = ["twitch.tv", "ttvnw.net"];
 
 // 检查域名是否匹配，包括子域名
 function isDomainMatch(hostname, pattern) {
@@ -12,23 +12,25 @@ function isDomainMatch(hostname, pattern) {
   if (/^[\d.:]+$/.test(hostname)) {
     return false;
   }
-  
+
   // 将域名按点分割成数组
-  const hostParts = hostname.split('.');
-  const patternParts = pattern.split('.');
-  
+  const hostParts = hostname.split(".");
+  const patternParts = pattern.split(".");
+
   // 如果主域名部分比匹配模式短，则不可能匹配
   if (hostParts.length < patternParts.length) {
     return false;
   }
-  
+
   // 从后向前匹配每个部分
   for (let i = 1; i <= patternParts.length; i++) {
-    if (hostParts[hostParts.length - i] !== patternParts[patternParts.length - i]) {
+    if (
+      hostParts[hostParts.length - i] !== patternParts[patternParts.length - i]
+    ) {
       return false;
     }
   }
-  
+
   return true;
 }
 
@@ -103,7 +105,10 @@ export default {
           }
         } catch (e) {
           // 如果不是 JSON 数组，尝试按逗号分割
-          const envDomains = env.proxydomains.split(',').map(d => d.trim()).filter(d => d);
+          const envDomains = env.proxydomains
+            .split(",")
+            .map((d) => d.trim())
+            .filter((d) => d);
           proxydomains = [...new Set([...proxydomains, ...envDomains])];
         }
       }
@@ -312,13 +317,19 @@ async function handlevlessWebSocket(request) {
 
           async function connectAndWrite(address, port) {
             // 检查域名是否在 proxydomains 列表中
-            const shouldUseNAT64 = proxydomains.some(domain => isDomainMatch(address, domain));
-            
+            const shouldUseNAT64 = proxydomains.some((domain) =>
+              isDomainMatch(address, domain)
+            );
+
             if (shouldUseNAT64) {
               // 如果域名匹配，获取NAT64 IPv6地址
               const proxyIP = await getIPv6ProxyAddress(result.addressRemote);
-              console.log(`指定域名: ${result.addressRemote}，直接通过NAT64 IPv6地址 ${proxyIP} 连接...`);
-              console.log(`连接参数: { hostname: ${proxyIP}, port: ${result.portRemote} }`);
+              console.log(
+                `指定域名: ${result.addressRemote}，直接通过NAT64 IPv6地址 ${proxyIP} 连接...`
+              );
+              console.log(
+                `连接参数: { hostname: ${proxyIP}, port: ${result.portRemote} }`
+              );
               address = proxyIP;
             }
 
@@ -347,7 +358,7 @@ async function handlevlessWebSocket(request) {
               }
               return num.toString(16).padStart(2, "0");
             });
-            const prefixes = ["2001:67c:2960:6464::"]; //,'2a01:4f9:c010:3f02:64::'
+            const prefixes = ["2602:fc59:b0:64::"]; //,'2a01:4f9:c010:3f02:64::'
             const chosenPrefix =
               prefixes[Math.floor(Math.random() * prefixes.length)];
             return `[${chosenPrefix}${hex[0]}${hex[1]}:${hex[2]}${hex[3]}]`;
@@ -367,7 +378,7 @@ async function handlevlessWebSocket(request) {
 
               const dnsResult = await dnsQuery.json();
               console.log(`DNS查询结果:`, dnsResult);
-              
+
               if (dnsResult.Answer && dnsResult.Answer.length > 0) {
                 console.log(`找到 ${dnsResult.Answer.length} 条记录`);
                 const aRecord = dnsResult.Answer.find(
@@ -396,33 +407,35 @@ async function handlevlessWebSocket(request) {
             try {
               const proxyIP = await getIPv6ProxyAddress(result.addressRemote);
               console.log(`尝试通过NAT64 IPv6地址 ${proxyIP} 连接...`);
-              console.log(`连接参数: { hostname: ${proxyIP}, port: ${result.portRemote} }`);
-              
+              console.log(
+                `连接参数: { hostname: ${proxyIP}, port: ${result.portRemote} }`
+              );
+
               let tcpSocket;
               try {
                 tcpSocket = await connect({
                   hostname: proxyIP,
                   port: result.portRemote,
                 });
-                console.log('TCP连接建立成功');
+                console.log("TCP连接建立成功");
               } catch (connErr) {
-                console.error('TCP连接建立失败:', connErr);
+                console.error("TCP连接建立失败:", connErr);
                 throw connErr;
               }
-              
+
               if (!tcpSocket) {
-                throw new Error('TCP连接返回为空');
+                throw new Error("TCP连接返回为空");
               }
-              
+
               remoteSocket = tcpSocket;
-              
+
               try {
                 const writer = tcpSocket.writable.getWriter();
                 await writer.write(rawClientData);
                 writer.releaseLock();
-                console.log('数据写入成功');
+                console.log("数据写入成功");
               } catch (writeErr) {
-                console.error('数据写入失败:', writeErr);
+                console.error("数据写入失败:", writeErr);
                 throw writeErr;
               }
 
@@ -436,12 +449,11 @@ async function handlevlessWebSocket(request) {
                   }
                 });
 
-              console.log('开始建立WebSocket管道...');
-           
+              console.log("开始建立WebSocket管道...");
+
               pipeRemoteToWebSocket(tcpSocket, serverWS, vlessRespHeader, null);
-            
-              console.log('WebSocket管道建立完成');
-              
+
+              console.log("WebSocket管道建立完成");
             } catch (err) {
               console.error("NAT64 IPv6连接过程失败:", err);
               if (serverWS && serverWS.readyState === WS_READY_STATE_OPEN) {

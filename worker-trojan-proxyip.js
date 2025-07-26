@@ -4,7 +4,7 @@ import { connect } from "cloudflare:sockets";
 let Pswd = "trojan";
 const proxyIPs = [""];
 
-// 添加需要直接使用NAT64的域名列表，支持从环境变量扩展
+// 添加需要直接使用 proxyip 的域名列表，支持从环境变量扩展
 let proxydomains = ["twitch.tv", "ttvnw.net"];
 let cn_hostnames = [""];
 let CDNIP =

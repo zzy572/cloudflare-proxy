@@ -2,9 +2,7 @@
 
 > 原项目：[https://github.com/yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan)
 
-~~高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题~~
-
-目前 NAT64 节点已经挂了，不过 NAT64 的方案仍然可行，等到有新的可用的 NAT64 节点再更新 [NAT64 脚本](./worker-vless-nat64.js)
+高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题
 
 ## 视频教程
 
