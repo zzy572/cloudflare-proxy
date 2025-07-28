@@ -2,13 +2,17 @@
 
 > 原项目：[https://github.com/yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan)
 
-高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题
+~~高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题~~
+
+NAT64 节点失效很快，感觉这种方式快要到尽头了，想要长期稳定使用建议还是使用 proxyip 脚本。
 
 ## 视频教程
 
-workers 代理搭建： https://youtu.be/HQcLxYbPSgo
+[workers 代理搭建](https://youtu.be/HQcLxYbPSgo)
 
-workers 代理优选IP：https://youtu.be/egjPHBbd9zw
+[workers 代理优选IP](https://youtu.be/egjPHBbd9zw)
+
+[为什么你搭建的节点不能访问推特?一个视频带你看透本质](https://youtu.be/L3-Q992_0eE?si=6uyic8a0PuZlUo0i)
 
 ## 固定ip，解决 twitch 无法观看 1080p 直播
 
