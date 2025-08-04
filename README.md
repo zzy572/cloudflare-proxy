@@ -2,9 +2,9 @@
 
 > 原项目：[https://github.com/yonggekkk/Cloudflare-vless-trojan](https://github.com/yonggekkk/Cloudflare-vless-trojan)
 
-~~高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题~~
+高！实在是高！白嫖 nat64 公共网关来做代理，太绝了！这样就解决了 workers 代理无法访问 ipv4 only 的网站问题
 
-NAT64 节点失效很快，感觉这种方式快要到尽头了，想要长期稳定使用建议还是使用 proxyip 脚本。
+NAT64 公共节点资源有限，大家且用且珍惜
 
 ## 视频教程
 
@@ -25,7 +25,7 @@ NAT64 节点失效很快，感觉这种方式快要到尽头了，想要长期�
 网络上有一些公开的 proxyip 的域名，其中有一些是使用脚本自动更新，会定时扫描互联网上的 proxyip，使用一个域名可以解析出来相当多的 proxyip 的地址，这种时候会有一个问题，假如你本次访问正好解析出来的是一个 ipv4 only 的 proxyip，那么你就可以访问推特，假如域名解析出来的 proxyip 是带有 ipv6 地址，那你就没法访问推特。
 有条件的小伙伴建议自己搭建一个 proxyip 节点，禁用 ipv6 以后，注意保护好信息，尽量避免泄漏。
 
-**注意，本项目提供的 [worker-trojan-proxyip](./worker-trojan-proxyip.js) 和 [worker-vless-proxyip](./worker-vless-proxyip.js)，均未内置 proxyip，需要自己在变量中设置；~~[worker-vless-nat64](./worker-vless-nat64.js) 则内置了公共 NAT64 节点~~，NAT64 节点已挂，望周知**
+**注意，本项目提供的 [worker-trojan-proxyip](./worker-trojan-proxyip.js) 和 [worker-vless-proxyip](./worker-vless-proxyip.js)，均未内置 proxyip，需要自己在变量中设置；[worker-vless-nat64](./worker-vless-nat64.js) 则内置了公共 NAT64 节点**
 
 ## worker-vless-proxyip 脚本变量设置
 
