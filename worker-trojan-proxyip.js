@@ -5,7 +5,7 @@ let Pswd = "trojan";
 const proxyIPs = [""];
 
 // 添加需要直接使用 proxyip 的域名列表，支持从环境变量扩展
-let proxydomains = ["twitch.tv", "ttvnw.net"];
+let proxydomains = ["twitch.tv", "ttvnw.net", "ipinfo.io"];
 let cn_hostnames = [""];
 let CDNIP =
   "\u0077\u0077\u0077\u002e\u0076\u0069\u0073\u0061\u002e\u0063\u006f\u006d\u002e\u0073\u0067";
@@ -98,6 +98,24 @@ const worker_default = {
   async fetch(request, env, ctx) {
     try {
       const { proxyip } = env;
+      // 处理环境变量中的 proxydomains
+      if (env.proxydomains) {
+        try {
+          // 尝试解析环境变量中的 JSON 数组
+          const envDomains = JSON.parse(env.proxydomains);
+          if (Array.isArray(envDomains)) {
+            // 合并环境变量中的域名和默认域名，去重
+            proxydomains = [...new Set([...proxydomains, ...envDomains])];
+          }
+        } catch (e) {
+          // 如果不是 JSON 数组，尝试按逗号分割
+          const envDomains = env.proxydomains
+            .split(",")
+            .map((d) => d.trim())
+            .filter((d) => d);
+          proxydomains = [...new Set([...proxydomains, ...envDomains])];
+        }
+      }
       if (proxyip) {
         if (proxyip.includes("]:")) {
           let lastColonIndex = proxyip.lastIndexOf(":");

@@ -105,6 +105,26 @@ export default {
     try {
       const { proxyip } = env;
       userID = env.uuid || userID;
+
+      // 处理环境变量中的 proxydomains
+      if (env.proxydomains) {
+        try {
+          // 尝试解析环境变量中的 JSON 数组
+          const envDomains = JSON.parse(env.proxydomains);
+          if (Array.isArray(envDomains)) {
+            // 合并环境变量中的域名和默认域名，去重
+            proxydomains = [...new Set([...proxydomains, ...envDomains])];
+          }
+        } catch (e) {
+          // 如果不是 JSON 数组，尝试按逗号分割
+          const envDomains = env.proxydomains
+            .split(",")
+            .map((d) => d.trim())
+            .filter((d) => d);
+          proxydomains = [...new Set([...proxydomains, ...envDomains])];
+        }
+      }
+
       if (proxyip) {
         if (proxyip.includes("]:")) {
           let lastColonIndex = proxyip.lastIndexOf(":");

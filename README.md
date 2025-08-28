@@ -27,10 +27,12 @@ NAT64 公共节点资源有限，大家且用且珍惜
 
 **注意，本项目提供的 [worker-trojan-proxyip](./worker-trojan-proxyip.js) 和 [worker-vless-proxyip](./worker-vless-proxyip.js)，均未内置 proxyip，需要自己在变量中设置；[worker-vless-nat64](./worker-vless-nat64.js) 则内置了公共 NAT64 节点**
 
-## worker-vless-proxyip 脚本变量设置
+## worker-vless-proxyip 脚本变量设置(该脚本稳定报错 1101，不建议使用)
 
 **只需要设置 uuid 就行，如果不担心被其他人扫到，uuid 都不需要改，不过还是建议修改**
 **建议搭配 ipv4 only 的 proxyip 使用**
+
+**worker-vless-proxyip脚本稳定报 1101错误，不建议使用，实测另外两个脚本还是可以正常部署的**
 
 | 变量作用 | 变量名称 | 变量值要求 | 变量默认值 | 变量要求 |
 |---------|----------|------------|------------|----------|
