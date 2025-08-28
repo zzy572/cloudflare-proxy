@@ -8,11 +8,13 @@ NAT64 公共节点资源有限，大家且用且珍惜
 
 ## 视频教程
 
-[workers 代理搭建](https://youtu.be/HQcLxYbPSgo)
+[workers 代理搭建](https://youtu.be/mmXJAx-fXHo)
 
 [workers 代理优选IP](https://youtu.be/egjPHBbd9zw)
 
-[为什么你搭建的节点不能访问推特?一个视频带你看透本质](https://youtu.be/L3-Q992_0eE?si=6uyic8a0PuZlUo0i)
+[延迟速度双优选！油管秒开4k、8K](https://youtu.be/egjPHBbd9zw)
+
+[为什么你搭建的节点不能访问推特?一个视频带你看透本质](https://youtu.be/L3-Q992_0eE)
 
 ## 固定ip，解决 twitch 无法观看 1080p 直播
 
